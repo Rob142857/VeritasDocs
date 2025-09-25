@@ -1,0 +1,38 @@
+{
+  "name": "veritas-documents",
+  "version": "1.0.0",
+  "description": "NFT-based legal document storage with post-quantum cryptography",
+  "main": "src/index.ts",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "build": "tsc",
+    "test": "vitest",
+    "lint": "eslint src/**/*.ts",
+    "format": "prettier --write src/**/*.ts"
+  },
+  "dependencies": {
+    "stripe": "^14.0.0",
+    "hono": "^4.0.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20231218.0",
+    "@types/node": "^20.10.0",
+    "typescript": "^5.3.0",
+    "wrangler": "^3.20.0",
+    "vitest": "^1.0.0",
+    "eslint": "^8.55.0",
+    "@typescript-eslint/eslint-plugin": "^6.13.0",
+    "@typescript-eslint/parser": "^6.13.0",
+    "prettier": "^3.1.0"
+  },
+  "keywords": [
+    "nft",
+    "legal-documents",
+    "post-quantum-cryptography",
+    "cloudflare-workers",
+    "blockchain"
+  ],
+  "author": "Veritas Documents",
+  "license": "MIT"
+}

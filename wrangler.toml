@@ -19,6 +19,9 @@ id = "your-staging-kv-namespace-id"
 [vars]
 ENVIRONMENT = "development"
 MAATARA_API_BASE = "https://maatara-core-worker.rme-6e5.workers.dev"
+# Cloudflare Web3 Gateway URLs
+ETHEREUM_RPC_URL = "https://cloudflare-eth.com/v1/mainnet"
+IPFS_GATEWAY_URL = "https://cloudflare-ipfs.com"
 
 # Add your secrets using: wrangler secret put SECRET_NAME
 # STRIPE_SECRET_KEY
@@ -26,3 +29,8 @@ MAATARA_API_BASE = "https://maatara-core-worker.rme-6e5.workers.dev"
 # MAATARA_CHAIN_PRIVATE_KEY
 # IPFS_API_KEY
 # ADMIN_SECRET_KEY
+# Web3 Integration Secrets:
+# VERITAS_CONTRACT_ADDRESS
+# ETHEREUM_PRIVATE_KEY
+# PINATA_API_KEY
+# PINATA_SECRET_KEY

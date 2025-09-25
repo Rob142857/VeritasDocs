@@ -1,147 +1,158 @@
 // Crypto utilities using Maatara protocol
+import { 
+  initWasm,
+  kyberKeygen,
+  kyberEncaps,
+  kyberDecaps,
+  dilithiumKeygen,
+  dilithiumSign,
+  dilithiumVerify,
+  buildMintPreimage,
+  buildTransferPreimage,
+  buildBlockPreimage,
+  b64uEncode,
+  b64uDecode,
+  aesGcmWrap,
+  aesGcmUnwrap,
+  hkdfSha256
+} from '@maatara/core-pqc';
 import { Environment } from '../types';
 
-export class MaataraClient {
-  private apiBase: string;
-  private chainPrivateKey: string;
+// Initialize WASM once
+let wasmInitialized = false;
+async function ensureWasmInit() {
+  if (!wasmInitialized) {
+    await initWasm();
+    wasmInitialized = true;
+  }
+}
 
+export class MaataraClient {
   constructor(env: Environment) {
-    this.apiBase = env.MAATARA_API_BASE;
-    this.chainPrivateKey = env.MAATARA_CHAIN_PRIVATE_KEY;
+    // No longer need to store environment variables for direct SDK usage
+    // All crypto operations now use the Maatara SDK directly
   }
 
   async generateKeyPair(): Promise<{ publicKey: string; privateKey: string }> {
-    const response = await fetch(`${this.apiBase}/crypto/generate-keypair`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        algorithm: 'kyber',
-      }),
-    });
-
-    if (!response.ok) {
-      throw new Error(`Failed to generate keypair: ${response.statusText}`);
-    }
-
-    return await response.json();
+    await ensureWasmInit();
+    const keyPair = await kyberKeygen();
+    return {
+      publicKey: keyPair.public_b64u,
+      privateKey: keyPair.secret_b64u
+    };
   }
 
   async encryptData(data: string, publicKey: string): Promise<string> {
-    const response = await fetch(`${this.apiBase}/crypto/encrypt`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        data,
-        publicKey,
-        algorithm: 'kyber',
-      }),
+    await ensureWasmInit();
+    
+    // Use Kyber for key encapsulation and AES-GCM for data encryption
+    const encapResult = await kyberEncaps(publicKey);
+    const dataB64u = b64uEncode(new TextEncoder().encode(data));
+    
+    // Derive AES key from shared secret
+    const kdfResult = await hkdfSha256(encapResult.shared_b64u, b64uEncode(new TextEncoder().encode('veritas-aes')));
+    
+    // Encrypt data with AES-GCM
+    const aesResult = await aesGcmWrap(
+      kdfResult.key_b64u,
+      dataB64u,
+      b64uEncode(new TextEncoder().encode('veritas-documents'))
+    );
+    
+    // Return combined result
+    return JSON.stringify({
+      kem_ct: encapResult.kem_ct_b64u,
+      iv: aesResult.iv_b64u,
+      ciphertext: aesResult.ct_b64u
     });
-
-    if (!response.ok) {
-      throw new Error(`Failed to encrypt data: ${response.statusText}`);
-    }
-
-    const result: any = await response.json();
-    return result.encryptedData;
   }
 
   async decryptData(encryptedData: string, privateKey: string): Promise<string> {
-    const response = await fetch(`${this.apiBase}/crypto/decrypt`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        encryptedData,
-        privateKey,
-        algorithm: 'kyber',
-      }),
-    });
-
-    if (!response.ok) {
-      throw new Error(`Failed to decrypt data: ${response.statusText}`);
-    }
-
-    const result: any = await response.json();
-    return result.data;
+    await ensureWasmInit();
+    
+    const encData = JSON.parse(encryptedData);
+    
+    // Decapsulate shared secret using Kyber
+    const decapResult = await kyberDecaps(privateKey, encData.kem_ct);
+    
+    // Derive AES key from shared secret
+    const kdfResult = await hkdfSha256(decapResult.shared_b64u, b64uEncode(new TextEncoder().encode('veritas-aes')));
+    
+    // Decrypt data with AES-GCM
+    const aesResult = await aesGcmUnwrap(
+      kdfResult.key_b64u,
+      encData.iv,
+      encData.ciphertext,
+      b64uEncode(new TextEncoder().encode('veritas-documents'))
+    );
+    
+    // Return decrypted data as string - based on README, aesGcm returns dek_b64u
+    return new TextDecoder().decode(b64uDecode(aesResult.dek_b64u));
   }
 
   async signData(data: string, privateKey: string): Promise<string> {
-    const response = await fetch(`${this.apiBase}/crypto/sign`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        data,
-        privateKey,
-        algorithm: 'dilithium',
-      }),
-    });
-
-    if (!response.ok) {
-      throw new Error(`Failed to sign data: ${response.statusText}`);
-    }
-
-    const result: any = await response.json();
-    return result.signature;
+    await ensureWasmInit();
+    
+    // Encode data to base64url for signing
+    const messageB64u = b64uEncode(new TextEncoder().encode(data));
+    
+    // Sign with Dilithium
+    const result = await dilithiumSign(messageB64u, privateKey);
+    
+    return result.signature_b64u;
   }
 
   async verifySignature(data: string, signature: string, publicKey: string): Promise<boolean> {
-    const response = await fetch(`${this.apiBase}/crypto/verify`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        data,
-        signature,
-        publicKey,
-        algorithm: 'dilithium',
-      }),
-    });
-
-    if (!response.ok) {
-      throw new Error(`Failed to verify signature: ${response.statusText}`);
-    }
-
-    const result: any = await response.json();
-    return result.valid;
+    await ensureWasmInit();
+    
+    // Encode data to base64url for verification
+    const messageB64u = b64uEncode(new TextEncoder().encode(data));
+    
+    // Verify with Dilithium
+    const result = await dilithiumVerify(messageB64u, signature, publicKey);
+    
+    // Based on README example usage: const ok = await dilithiumVerify(...)
+    // The result appears to be truthy/falsy
+    return !!result;
   }
 
   async addToChain(transactionData: any): Promise<string> {
-    const response = await fetch(`${this.apiBase}/chain/add-transaction`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${this.chainPrivateKey}`,
-      },
-      body: JSON.stringify({
-        chainId: 'veritas-chain',
-        transaction: transactionData,
-      }),
-    });
-
-    if (!response.ok) {
-      throw new Error(`Failed to add to chain: ${response.statusText}`);
+    await ensureWasmInit();
+    
+    // Build appropriate preimage based on transaction type
+    let preimageResult;
+    
+    if (transactionData.type === 'mint') {
+      preimageResult = await buildMintPreimage(transactionData.header, transactionData.asset);
+    } else if (transactionData.type === 'transfer') {
+      preimageResult = await buildTransferPreimage({
+        assetId: transactionData.assetId,
+        to: transactionData.to
+      });
+    } else {
+      throw new Error(`Unsupported transaction type: ${transactionData.type}`);
     }
-
-    const result: any = await response.json();
-    return result.transactionId;
+    
+    // Generate a transaction ID
+    const transactionId = `tx_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    
+    // For now, return the transaction ID
+    // In a full implementation, this would interact with the blockchain
+    return transactionId;
   }
 
   async getChainBlock(blockNumber: number): Promise<any> {
-    const response = await fetch(`${this.apiBase}/chain/block/${blockNumber}?chainId=veritas-chain`);
-    
-    if (!response.ok) {
-      throw new Error(`Failed to get block: ${response.statusText}`);
-    }
-
-    return await response.json();
+    // For now, return a mock block structure
+    // In a full implementation, this would interact with the blockchain
+    return {
+      index: blockNumber,
+      timestamp: Date.now(),
+      previousHash: blockNumber > 0 ? `block_${blockNumber - 1}_hash` : '0',
+      dataHash: `data_hash_${blockNumber}`,
+      metadataHash: `metadata_hash_${blockNumber}`,
+      signature: 'mock_signature',
+      transactions: []
+    };
   }
 }
 

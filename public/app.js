@@ -130,7 +130,11 @@ class VeritasApp {
         </form>
 
         <div class="mt-2 text-center">
-          <p class="text-muted">Don't have an account? Contact an administrator for an invitation.</p>
+          <p class="text-muted">Don't have an account? 
+            <a href="#" id="request-account-link" class="text-primary" style="text-decoration: underline;">
+              Request new account
+            </a>
+          </p>
         </div>
       </div>
     `;
@@ -138,6 +142,11 @@ class VeritasApp {
     document.getElementById('login-form').addEventListener('submit', (e) => {
       e.preventDefault();
       this.handleLogin();
+    });
+
+    document.getElementById('request-account-link').addEventListener('click', (e) => {
+      e.preventDefault();
+      this.openAccountRequestEmail();
     });
   }
 
@@ -486,6 +495,32 @@ class VeritasApp {
     this.currentUser = null;
     localStorage.removeItem('veritas-user');
     this.navigateTo('login');
+  }
+
+  openAccountRequestEmail() {
+    // Email details
+    const adminEmail = 'admin@veritasdocs.com'; // You can configure this
+    const subject = 'Request New Account - Veritas Documents';
+    const body = `Dear Administrator,
+
+I am requesting a new account for Veritas Documents.
+
+Account Details:
+- Email Address: [Please enter the email address you want associated with this account]
+- Reason for Request: [Please explain why you need access to Veritas Documents]
+
+Please note: This email is being sent from the email address that should be connected to the requested account.
+
+Thank you for your consideration.
+
+Best regards,
+[Your Name]`;
+
+    // Create the mailto link
+    const mailtoLink = `mailto:${adminEmail}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+    
+    // Open the email client
+    window.location.href = mailtoLink;
   }
 
   showAlert(type, message) {

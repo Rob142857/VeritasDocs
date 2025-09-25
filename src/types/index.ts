@@ -25,6 +25,11 @@ export interface Asset {
   updatedAt: number;
   isPubliclySearchable: boolean;
   publicMetadata?: Record<string, any>;
+  // Web3 integration
+  merkleRoot?: string; // Ethereum Merkle root hash
+  ethereumTxHash?: string; // Transaction hash on Ethereum
+  blockNumber?: number; // Ethereum block number
+  ipfsMetadataHash?: string; // IPFS hash for metadata
 }
 
 export interface OneTimeLink {
@@ -89,6 +94,13 @@ export interface Environment {
   IPFS_API_KEY: string;
   ADMIN_SECRET_KEY: string;
   MAATARA_API_BASE: string;
+  // Web3 and IPFS configuration
+  ETHEREUM_RPC_URL: string;
+  VERITAS_CONTRACT_ADDRESS: string;
+  ETHEREUM_PRIVATE_KEY: string;
+  IPFS_GATEWAY_URL: string;
+  PINATA_API_KEY?: string;
+  PINATA_SECRET_KEY?: string;
 }
 
 export interface APIResponse<T = any> {

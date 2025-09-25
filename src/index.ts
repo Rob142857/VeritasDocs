@@ -4,6 +4,7 @@ import { cors } from 'hono/cors';
 import { Environment } from './types';
 import { authHandler } from './handlers/auth';
 import { assetHandler } from './handlers/assets';
+import { enhancedAssetHandler } from './handlers/web3-assets';
 import { userHandler } from './handlers/users';
 import { stripeHandler } from './handlers/stripe';
 import { searchHandler } from './handlers/search';
@@ -371,8 +372,10 @@ body {
 .mt-2 { margin-top: 1rem !important; }
 .p-4 { padding: 2rem !important; }`;
 
-  c.header('Content-Type', 'text/css');
-  return c.text(css);
+  return c.text(css, 200, {
+    'Content-Type': 'text/css; charset=utf-8',
+    'Cache-Control': 'public, max-age=3600'
+  });
 });
 
 app.get('/static/app.js', async (c) => {
@@ -726,13 +729,16 @@ document.addEventListener('DOMContentLoaded', () => {
   new VeritasApp();
 });`;
 
-  c.header('Content-Type', 'application/javascript');
-  return c.text(js);
+  return c.text(js, 200, {
+    'Content-Type': 'application/javascript; charset=utf-8',
+    'Cache-Control': 'public, max-age=3600'
+  });
 });
 
 // API Routes
 app.route('/api/auth', authHandler);
 app.route('/api/assets', assetHandler);
+app.route('/api/web3-assets', enhancedAssetHandler);
 app.route('/api/users', userHandler);
 app.route('/api/stripe', stripeHandler);
 app.route('/api/search', searchHandler);
@@ -772,6 +778,61 @@ app.get('/', (c) => {
     </body>
     </html>
   `);
+});
+
+// Web3 Demo page - serve static demo file
+app.get('/demo', async (c) => {
+  const demoContent = `<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Veritas Documents - Web3 Demo</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 1200px; margin: 0 auto; padding: 20px; background: #f8fafc; }
+        .card { background: white; border-radius: 8px; padding: 24px; margin: 16px 0; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+        .form-group { margin: 16px 0; }
+        label { display: block; margin-bottom: 8px; font-weight: 500; }
+        input, textarea, select { width: 100%; padding: 12px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 14px; }
+        button { background: #2563eb; color: white; padding: 12px 24px; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; margin: 8px; }
+        .btn-secondary { background: #6b7280; }
+        .status { padding: 12px; border-radius: 6px; margin: 16px 0; }
+        .success { background: #dcfce7; color: #166534; }
+        .error { background: #fef2f2; color: #dc2626; }
+        .info { background: #eff6ff; color: #1d4ed8; }
+        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+        pre { background: #1f2937; color: #f9fafb; padding: 16px; border-radius: 6px; overflow-x: auto; font-size: 12px; }
+    </style>
+</head>
+<body>
+    <h1>🔐 Veritas Documents - Web3 Integration Demo</h1>
+    <p>Demonstrating IPFS storage and Ethereum anchoring with post-quantum cryptography</p>
+    <div class="card">
+        <h3>Web3 Integration Status</h3>
+        <p>✅ IPFS Client implemented with Cloudflare Gateway</p>
+        <p>✅ Ethereum Anchoring using Maatara post-quantum signatures</p>
+        <p>✅ Enhanced asset handlers with Web3 capabilities</p>
+        <p>🔧 Ready for testing with real credentials</p>
+        
+        <h4>Available Endpoints:</h4>
+        <ul>
+            <li><code>POST /api/web3-assets/create-web3</code> - Create asset with IPFS + Ethereum</li>
+            <li><code>GET /api/web3-assets/web3/:id</code> - Get asset with verification</li>
+            <li><code>POST /api/web3-assets/web3/:id/decrypt</code> - Decrypt content from IPFS</li>
+        </ul>
+        
+        <h4>Next Steps:</h4>
+        <ol>
+            <li>Configure Cloudflare Web3 Gateway credentials in wrangler.toml</li>
+            <li>Set up Ethereum network configuration</li>
+            <li>Test IPFS upload/retrieval functionality</li>
+            <li>Verify Ethereum anchoring process</li>
+        </ol>
+    </div>
+</body>
+</html>`;
+  
+  return c.html(demoContent);
 });
 
 // Health check

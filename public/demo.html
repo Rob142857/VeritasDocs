@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Veritas Documents - Web3 Demo</title>
+    <style>
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            max-width: 1200px; 
+            margin: 0 auto; 
+            padding: 20px;
+            background: #f8fafc;
+        }
+        .card { 
+            background: white; 
+            border-radius: 8px; 
+            padding: 24px; 
+            margin: 16px 0; 
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+        .form-group { 
+            margin: 16px 0; 
+        }
+        label { 
+            display: block; 
+            margin-bottom: 8px; 
+            font-weight: 500;
+        }
+        input, textarea, select { 
+            width: 100%; 
+            padding: 12px; 
+            border: 1px solid #d1d5db; 
+            border-radius: 6px;
+            font-size: 14px;
+        }
+        button { 
+            background: #2563eb; 
+            color: white; 
+            padding: 12px 24px; 
+            border: none; 
+            border-radius: 6px; 
+            cursor: pointer;
+            font-size: 14px;
+            margin: 8px;
+        }
+        button:hover { background: #1d4ed8; }
+        button:disabled { opacity: 0.5; cursor: not-allowed; }
+        .btn-secondary { background: #6b7280; }
+        .btn-secondary:hover { background: #4b5563; }
+        .status { 
+            padding: 12px; 
+            border-radius: 6px; 
+            margin: 16px 0;
+        }
+        .success { background: #dcfce7; color: #166534; border: 1px solid #bbf7d0; }
+        .error { background: #fef2f2; color: #dc2626; border: 1px solid #fecaca; }
+        .info { background: #eff6ff; color: #1d4ed8; border: 1px solid #bfdbfe; }
+        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+        .asset-item { 
+            padding: 16px; 
+            border: 1px solid #e5e7eb; 
+            border-radius: 6px; 
+            margin: 8px 0;
+        }
+        pre {
+            background: #1f2937;
+            color: #f9fafb;
+            padding: 16px;
+            border-radius: 6px;
+            overflow-x: auto;
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+    <h1>🔐 Veritas Documents - Web3 Integration Demo</h1>
+    <p>Demonstrating IPFS storage and Ethereum anchoring with post-quantum cryptography</p>
+
+    <div class="grid">
+        <div class="card">
+            <h3>Create Web3 Asset</h3>
+            <form id="create-form">
+                <div class="form-group">
+                    <label>User ID</label>
+                    <input type="text" id="userId" placeholder="user_123" required>
+                </div>
+                <div class="form-group">
+                    <label>Document Title</label>
+                    <input type="text" id="title" placeholder="Last Will and Testament" required>
+                </div>
+                <div class="form-group">
+                    <label>Description</label>
+                    <textarea id="description" placeholder="Document description..."></textarea>
+                </div>
+                <div class="form-group">
+                    <label>Document Type</label>
+                    <select id="documentType">
+                        <option value="will">Will</option>
+                        <option value="deed">Property Deed</option>
+                        <option value="certificate">Certificate</option>
+                        <option value="contract">Contract</option>
+                        <option value="other">Other</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Document Content (JSON)</label>
+                    <textarea id="documentData" placeholder='{"content": "document text here..."}'></textarea>
+                </div>
+                <div class="form-group">
+                    <label>Private Key</label>
+                    <textarea id="privateKey" placeholder="Enter user's private key for signing..."></textarea>
+                </div>
+                <button type="submit">🚀 Create Asset with Web3</button>
+            </form>
+        </div>
+
+        <div class="card">
+            <h3>Asset Information</h3>
+            <form id="get-form">
+                <div class="form-group">
+                    <label>Asset ID</label>
+                    <input type="text" id="assetId" placeholder="asset_123456">
+                </div>
+                <button type="submit">📄 Get Asset Details</button>
+                <button type="button" id="decrypt-btn" class="btn-secondary">🔓 Decrypt Content</button>
+            </form>
+        </div>
+    </div>
+
+    <div id="status"></div>
+
+    <div class="card">
+        <h3>Results</h3>
+        <div id="results"></div>
+    </div>
+
+    <script>
+        let lastCreatedAsset = null;
+
+        // Create Web3 Asset
+        document.getElementById('create-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const formData = {
+                userId: document.getElementById('userId').value,
+                title: document.getElementById('title').value,
+                description: document.getElementById('description').value,
+                documentType: document.getElementById('documentType').value,
+                documentData: JSON.parse(document.getElementById('documentData').value || '{}'),
+                privateKey: document.getElementById('privateKey').value,
+                isPubliclySearchable: true
+            };
+
+            showStatus('Creating asset with IPFS and Ethereum anchoring...', 'info');
+            
+            try {
+                const response = await fetch('/api/web3-assets/create-web3', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(formData)
+                });
+
+                const result = await response.json();
+                
+                if (result.success) {
+                    lastCreatedAsset = result.data.asset;
+                    document.getElementById('assetId').value = lastCreatedAsset.id;
+                    
+                    showStatus('✅ Asset created successfully!', 'success');
+                    displayResults({
+                        'Asset Details': lastCreatedAsset,
+                        'Ethereum Anchor': result.data.ethereumAnchor,
+                        'IPFS Gateway URLs': {
+                            'Document Content': lastCreatedAsset.ipfsGatewayUrl,
+                            'Metadata': lastCreatedAsset.metadataGatewayUrl
+                        }
+                    });
+                } else {
+                    showStatus('Error: ' + result.error, 'error');
+                }
+            } catch (error) {
+                showStatus('Network Error: ' + error.message, 'error');
+            }
+        });
+
+        // Get Asset Details
+        document.getElementById('get-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const assetId = document.getElementById('assetId').value;
+            if (!assetId) return;
+
+            showStatus('Retrieving asset and verifying Web3 anchors...', 'info');
+            
+            try {
+                const response = await fetch('/api/web3-assets/web3/' + assetId);
+                const result = await response.json();
+                
+                if (result.success) {
+                    showStatus('✅ Asset retrieved successfully!', 'success');
+                    
+                    const asset = result.data.asset;
+                    const verifications = result.data.verifications;
+                    
+                    displayResults({
+                        'Asset Information': {
+                            'ID': asset.id,
+                            'Token ID': asset.tokenId,
+                            'Title': asset.title,
+                            'Type': asset.documentType,
+                            'Owner': asset.ownerId,
+                            'Created': new Date(asset.createdAt).toLocaleString()
+                        },
+                        'Web3 Integration': {
+                            'IPFS Hash': asset.ipfsHash,
+                            'Metadata Hash': asset.ipfsMetadataHash,
+                            'Merkle Root': asset.merkleRoot,
+                            'Ethereum TX': asset.ethereumTxHash,
+                            'Block Number': asset.blockNumber || 'Pending'
+                        },
+                        'Gateway URLs': {
+                            'Document': asset.ipfsGatewayUrl,
+                            'Metadata': asset.metadataGatewayUrl
+                        },
+                        'Verification Status': verifications
+                    });
+                } else {
+                    showStatus('Error: ' + result.error, 'error');
+                }
+            } catch (error) {
+                showStatus('Network Error: ' + error.message, 'error');
+            }
+        });
+
+        // Decrypt Asset Content
+        document.getElementById('decrypt-btn').addEventListener('click', async () => {
+            const assetId = document.getElementById('assetId').value;
+            const privateKey = document.getElementById('privateKey').value;
+            
+            if (!assetId || !privateKey) {
+                showStatus('Please provide Asset ID and Private Key', 'error');
+                return;
+            }
+
+            showStatus('Decrypting document content from IPFS...', 'info');
+            
+            try {
+                const response = await fetch('/api/web3-assets/web3/' + assetId + '/decrypt', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ privateKey })
+                });
+
+                const result = await response.json();
+                
+                if (result.success) {
+                    showStatus('✅ Document decrypted successfully!', 'success');
+                    displayResults({
+                        'Decrypted Content': result.data.documentData,
+                        'Asset Info': result.data.asset
+                    });
+                } else {
+                    showStatus('Decryption Error: ' + result.error, 'error');
+                }
+            } catch (error) {
+                showStatus('Network Error: ' + error.message, 'error');
+            }
+        });
+
+        function showStatus(message, type) {
+            const status = document.getElementById('status');
+            status.innerHTML = '<div class="status ' + type + '">' + message + '</div>';
+        }
+
+        function displayResults(data) {
+            const results = document.getElementById('results');
+            results.innerHTML = Object.entries(data).map(([key, value]) => 
+                '<div class="asset-item">' +
+                    '<h4>' + key + '</h4>' +
+                    '<pre>' + JSON.stringify(value, null, 2) + '</pre>' +
+                '</div>'
+            ).join('');
+        }
+
+        // Demo data
+        document.getElementById('documentData').value = JSON.stringify({
+            "content": "I, John Doe, being of sound mind and body, do hereby declare this to be my Last Will and Testament.",
+            "witnesses": ["Jane Smith", "Bob Johnson"],
+            "notarized": true,
+            "date": new Date().toISOString()
+        }, null, 2);
+    </script>
+</body>
+</html>

@@ -51,12 +51,19 @@ export class EthereumAnchoringClient {
       };
 
       // Use Maatara's buildAnchorPreimage for deterministic anchoring
-      const { canonical, msg_b64u } = await buildAnchorPreimage(
+      const preimage = await buildAnchorPreimage(
         userId,
         rootHex,
         epoch,
         chains
       );
+
+      // Validate returned values to satisfy type safety
+      if (!preimage || !preimage.canonical || !preimage.msg_b64u) {
+        throw new Error('Invalid preimage returned from Maatara buildAnchorPreimage');
+      }
+
+      const { canonical, msg_b64u } = preimage;
 
       return {
         anchorHash: rootHex,
@@ -79,12 +86,16 @@ export class EthereumAnchoringClient {
   ): Promise<EthereumAnchor> {
     try {
       // Sign the anchor message with Dilithium
-      const signature = await dilithiumSign(anchor.msg_b64u, userPrivateKey);
+      const sig = await dilithiumSign(anchor.msg_b64u, userPrivateKey);
+      const signature_b64u = sig?.signature_b64u;
+      if (!signature_b64u) {
+        throw new Error('Dilithium signature not returned by SDK');
+      }
       
       // Create the signed anchor
       const signedAnchor: EthereumAnchor = {
         ...anchor,
-        signature: signature.signature_b64u
+        signature: signature_b64u
       };
 
       // Submit to Ethereum via Cloudflare Web3 Gateway
@@ -171,7 +182,14 @@ export class EthereumAnchoringClient {
       signature: anchor.signature,
       timestamp: anchor.timestamp
     };
-    return '0x' + Buffer.from(JSON.stringify(mockTx)).toString('hex');
+    // Convert JSON string to hex without Node Buffer (Worker-compatible)
+    const encoder = new TextEncoder();
+    const bytes = encoder.encode(JSON.stringify(mockTx));
+    let hex = '';
+    for (let i = 0; i < bytes.length; i++) {
+      hex += bytes[i].toString(16).padStart(2, '0');
+    }
+    return '0x' + hex;
   }
 
   private generateMockTxHash(): string {

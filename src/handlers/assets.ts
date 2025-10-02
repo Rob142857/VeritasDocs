@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { Environment, Asset, User, APIResponse } from '../types';
 import { MaataraClient, generateId, uploadToIPFS } from '../utils/crypto';
+import { initializeVeritasChain, addAssetToChain, addAssetTransferToChain } from '../utils/blockchain';
 
 const assetHandler = new Hono<{ Bindings: Environment }>();
 
@@ -91,23 +92,20 @@ assetHandler.post('/create', async (c) => {
     assetsList.push(assetId);
     await env.VERITAS_KV.put(userAssetsKey, JSON.stringify(assetsList));
 
-    // Add asset creation to blockchain
-    const chainTransaction = {
-      type: 'asset_creation',
+    // Add asset creation to Veritas blockchain
+    const blockchain = await initializeVeritasChain(env);
+    const txId = await addAssetToChain(
+      blockchain,
       assetId,
-      tokenId,
-      creatorId: userId,
-      ownerId: userId,
+      userId,
       ipfsHash,
-      signature,
-      timestamp: Date.now(),
-    };
-
-    await maataraClient.addToChain(chainTransaction);
+      privateKey,
+      user.publicKey
+    );
 
     return c.json<APIResponse>({
       success: true,
-      data: { asset },
+      data: { asset, blockchainTxId: txId },
       message: 'Asset created successfully',
     });
   } catch (error) {
@@ -228,6 +226,14 @@ assetHandler.post('/transfer', async (c) => {
       return c.json<APIResponse>({ success: false, error: 'You do not own this asset' }, 403);
     }
 
+    // Verify from user exists
+    const fromUserData = await env.VERITAS_KV.get(`user:${fromUserId}`);
+    if (!fromUserData) {
+      return c.json<APIResponse>({ success: false, error: 'From user not found' }, 404);
+    }
+
+    const fromUser: User = JSON.parse(fromUserData);
+
     // Verify target user exists
     const toUserData = await env.VERITAS_KV.get(`user:${toUserId}`);
     if (!toUserData) {
@@ -273,21 +279,20 @@ assetHandler.post('/transfer', async (c) => {
     newAssetsList.push(assetId);
     await env.VERITAS_KV.put(newOwnerAssetsKey, JSON.stringify(newAssetsList));
 
-    // Add transfer to blockchain
-    const chainTransaction = {
-      type: 'asset_transfer',
+    // Add transfer to Veritas blockchain
+    const blockchain = await initializeVeritasChain(env);
+    const txId = await addAssetTransferToChain(
+      blockchain,
       assetId,
       fromUserId,
       toUserId,
-      signature,
-      timestamp: Date.now(),
-    };
-
-    await maataraClient.addToChain(chainTransaction);
+      privateKey,
+      fromUser.publicKey
+    );
 
     return c.json<APIResponse>({
       success: true,
-      data: { asset },
+      data: { asset, blockchainTxId: txId },
       message: 'Asset transferred successfully',
     });
   } catch (error) {

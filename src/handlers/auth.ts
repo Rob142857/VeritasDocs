@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { Environment, OneTimeLink, User, APIResponse } from '../types';
 import { MaataraClient, generateId, generateMnemonic } from '../utils/crypto';
+import { initializeVeritasChain, addUserToChain } from '../utils/blockchain';
 
 const authHandler = new Hono<{ Bindings: Environment }>();
 
@@ -111,15 +112,14 @@ authHandler.post('/activate', async (c) => {
     oneTimeLink.usedAt = Date.now();
     await env.VERITAS_KV.put(`link:${token}`, JSON.stringify(oneTimeLink));
 
-    // Add user registration to blockchain
-    const chainTransaction = {
-      type: 'user_registration',
+    // Add user registration to Veritas blockchain
+    const blockchain = await initializeVeritasChain(env);
+    const txId = await addUserToChain(
+      blockchain,
       userId,
-      publicKey: keyPair.publicKey,
-      timestamp: Date.now(),
-    };
-
-    await maataraClient.addToChain(chainTransaction);
+      keyPair.publicKey,
+      keyPair.privateKey
+    );
 
     return c.json<APIResponse>({
       success: true,
@@ -128,6 +128,7 @@ authHandler.post('/activate', async (c) => {
         publicKey: keyPair.publicKey,
         privateKey: keyPair.privateKey,
         recoveryPhrase,
+        blockchainTxId: txId
       },
       message: 'Account activated successfully',
     });

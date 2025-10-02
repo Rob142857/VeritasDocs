@@ -117,40 +117,24 @@ export class MaataraClient {
   }
 
   async addToChain(transactionData: any): Promise<string> {
-    await ensureWasmInit();
-    
-    // Build appropriate preimage based on transaction type
-    let preimageResult;
-    
-    if (transactionData.type === 'mint') {
-      preimageResult = await buildMintPreimage(transactionData.header, transactionData.asset);
-    } else if (transactionData.type === 'transfer') {
-      preimageResult = await buildTransferPreimage({
-        assetId: transactionData.assetId,
-        to: transactionData.to
-      });
-    } else {
-      throw new Error(`Unsupported transaction type: ${transactionData.type}`);
-    }
-    
-    // Generate a transaction ID
+    // This method is now deprecated - use VeritasBlockchain class instead
+    // For backward compatibility, return a mock transaction ID
     const transactionId = `tx_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-    
-    // For now, return the transaction ID
-    // In a full implementation, this would interact with the blockchain
+    console.warn('addToChain is deprecated. Use VeritasBlockchain.addTransaction() instead.');
     return transactionId;
   }
 
   async getChainBlock(blockNumber: number): Promise<any> {
-    // For now, return a mock block structure
-    // In a full implementation, this would interact with the blockchain
+    // This method is now deprecated - use VeritasBlockchain class instead
+    // For backward compatibility, return a mock block structure
+    console.warn('getChainBlock is deprecated. Use VeritasBlockchain.getBlock() instead.');
     return {
       index: blockNumber,
       timestamp: Date.now(),
       previousHash: blockNumber > 0 ? `block_${blockNumber - 1}_hash` : '0',
       dataHash: `data_hash_${blockNumber}`,
       metadataHash: `metadata_hash_${blockNumber}`,
-      signature: 'mock_signature',
+      signature: 'deprecated_mock_signature',
       transactions: []
     };
   }

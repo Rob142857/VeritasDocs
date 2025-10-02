@@ -1,0 +1,29 @@
+# Veritas Documents - Production Environment Variables
+# Copy this to your Cloudflare Workers environment or wrangler.toml
+
+# Stripe Configuration
+STRIPE_SECRET_KEY=sk_test_51SDoCUCRTqE9RSalAP3oP7Lfv1Asu6WyeW66xwVdBmmOikh1HSkapSIYrPtH6ByElbBHetqvREiGD47ViSWsTyAy00bYXhv8Zd
+STRIPE_WEBHOOK_SECRET=pk_test_51SDoCUCRTqE9RSalWwJOpB1CSe66XTHKRuadoYrXtmwO7qf3yIYQbYsYEDKdf2ibzqKRfgWu3dBxeDDynvyeEKnW00w2tycbpD
+
+# Maatara Protocol Configuration
+MAATARA_CHAIN_PRIVATE_KEY=384382648409c9d133290fead529ea4c52f7859b9696982fa99246a8f83b17c1b12440c1891ffef64e5eda72830616dae14bbab061f375a241a6e9f6b9a08e9d
+
+# IPFS Configuration (Cloudflare Gateway)
+IPFS_API_KEY=your_cloudflare_ipfs_api_key
+IPFS_GATEWAY_URL=https://cloudflare-ipfs.com
+
+# Ethereum Configuration (Cloudflare Web3)
+ETHEREUM_RPC_URL=https://cloudflare-eth.com/v1/mainnet
+ETHEREUM_PRIVATE_KEY=0x_your_ethereum_private_key
+VERITAS_CONTRACT_ADDRESS=0x_your_contract_address
+
+# Admin Configuration
+ADMIN_SECRET_KEY=06e88356a928fd9077806f44a4142a83594afa09b8d5af90ae2fb3f31b3f4b33
+
+# Optional: Pinata for enhanced IPFS pinning
+PINATA_API_KEY=your_pinata_api_key
+PINATA_SECRET_KEY=your_pinata_secret_key
+
+# System Configuration
+ENVIRONMENT=production
+MAATARA_API_BASE=https://maatara-core-worker.rme-6e5.workers.dev

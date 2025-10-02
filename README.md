@@ -16,12 +16,14 @@ A secure, decentralized legal document storage platform built on Cloudflare Work
 ### 🌐 **Web3 Integration**
 - **IPFS Storage**: Decentralized document storage via Cloudflare Gateway
 - **Ethereum Anchoring**: Blockchain verification and immutable audit trail
+- **Veritas Blockchain**: Custom blockchain stored in IPFS with post-quantum signatures
 - **NFT Assets**: Each document is a unique, transferable NFT
 
 ### 💳 **Streamlined Payments**
 - **Stripe Integration**: Secure $25 payment processing
 - **One-Time Payments**: Pay per asset creation
 - **Admin Controls**: Invitation-based user onboarding
+- **CLI Tools**: Command-line interface for admin account management
 
 ### 🎨 **Clean Experience**
 - **Minimalist UI**: Professional, no-nonsense interface
@@ -60,7 +62,46 @@ npm run dev
 
 # Test Web3 integration
 # Visit: http://127.0.0.1:8787/demo
+
+# Generate admin account for production
+node cli.js generate-admin admin@yourcompany.com
 ```
+
+### Admin CLI Tools
+
+The CLI tool helps with production setup and admin account management:
+
+```bash
+# Generate admin account and setup files
+node cli.js generate-admin admin@company.com
+
+# Create user account (generates data - use PowerShell script for actual creation)
+node cli.js create-user admin@company.com admin
+
+# Generate production secrets template
+node cli.js generate-secrets
+
+# Validate project configuration
+node cli.js validate-config
+```
+
+### Creating Production User Accounts
+
+After deployment, create user accounts that can actually log into the platform:
+
+**Option 1: Via API (Recommended for Production)**
+```powershell
+# Call the actual API endpoints to create users
+.\create-user-api.ps1 -Email "admin@company.com" -BaseUrl "https://your-app.workers.dev"
+```
+
+**Option 2: Direct KV Store (For Development/Testing)**
+```powershell
+# Create user directly in KV store
+.\create-production-user.ps1 -Email "admin@company.com" -AccountType "admin"
+```
+
+Both scripts will provide you with login credentials (email + private key) that work with the platform.
 
 ## 🔧 Configuration
 
@@ -133,8 +174,10 @@ curl "http://127.0.0.1:8787/api/search?q=will&type=will"
 - [x] Post-quantum cryptography with real Maatara SDK
 - [x] IPFS storage via Cloudflare Gateway
 - [x] Ethereum anchoring with verification
+- [x] Veritas Blockchain stored in IPFS with minimal pinning
 - [x] Stripe payment processing ($25/asset)
 - [x] Admin-controlled user onboarding
+- [x] CLI tools for admin account management
 - [x] Clean, responsive UI
 - [x] Public document search
 - [x] Complete API endpoints
@@ -155,20 +198,52 @@ curl "http://127.0.0.1:8787/api/search?q=will&type=will"
 
 ## 🚀 Deployment
 
-### Production Deployment
+### Production Setup with CLI
+
+1. **Generate Admin Account & Secrets**
+   ```bash
+   # Generate admin account and setup files
+   node cli.js generate-admin admin@yourcompany.com
+   ```
+   This creates:
+   - `production-env-template.txt` - Environment variables template
+   - `setup-secrets.ps1` - PowerShell script for Cloudflare secrets
+
+2. **Configure Production Secrets**
+   ```bash
+   # Run the generated PowerShell script
+   .\setup-secrets.ps1
+   ```
+   Or manually set secrets:
+   ```bash
+   wrangler secret put STRIPE_SECRET_KEY --env production
+   wrangler secret put ADMIN_SECRET_KEY --env production
+   # ... set other required secrets
+   ```
+
+3. **Update wrangler.toml**
+   ```toml
+   [[env.production.kv_namespaces]]
+   binding = "VERITAS_KV"
+   id = "your-production-kv-namespace-id"  # Get from Cloudflare dashboard
+   ```
+
+4. **Deploy to Production**
+   ```bash
+   wrangler deploy --env production
+   ```
+
+### Post-Deployment Verification
 ```bash
-# Deploy to Cloudflare Workers
-wrangler deploy --env production
-
-# Verify deployment
+# Health check
 curl https://your-domain.com/health
-```
 
-### Post-Deployment
-1. Configure Cloudflare Web3 gateway access
-2. Set up monitoring and alerting
-3. Test end-to-end Web3 functionality
-4. Configure custom domain and SSL
+# Test admin functionality
+curl -X POST https://your-domain.com/api/auth/create-link \
+  -H "Authorization: Bearer YOUR_ADMIN_SECRET" \
+  -H "Content-Type: application/json" \
+  -d '{"email":"user@example.com"}'
+```
 
 ## 🔐 Security Features
 

@@ -4,13 +4,16 @@ compatibility_date = "2024-01-01"
 
 [env.production.vars]
 ENVIRONMENT = "production"
+MAATARA_API_BASE = "https://maatara-core-worker.rme-6e5.workers.dev"
+ETHEREUM_RPC_URL = "https://cloudflare-eth.com/v1/mainnet"
+IPFS_GATEWAY_URL = "https://cloudflare-ipfs.com"
 
 [env.staging.vars]
 ENVIRONMENT = "staging"
 
 [[env.production.kv_namespaces]]
 binding = "VERITAS_KV"
-id = "your-production-kv-namespace-id"
+id = "9f0ea31309cd44cab7bfe3569e16aa45"
 
 [[env.staging.kv_namespaces]]
 binding = "VERITAS_KV"
@@ -22,6 +25,11 @@ MAATARA_API_BASE = "https://maatara-core-worker.rme-6e5.workers.dev"
 # Cloudflare Web3 Gateway URLs
 ETHEREUM_RPC_URL = "https://cloudflare-eth.com/v1/mainnet"
 IPFS_GATEWAY_URL = "https://cloudflare-ipfs.com"
+
+[[kv_namespaces]]
+binding = "VERITAS_KV"
+id = "77a8b18c45f341b7aa1b91de1dc8a55e"
+preview_id = "f280a31ef23b4d7cb29d5ac314457674"
 
 # Add your secrets using: wrangler secret put SECRET_NAME
 # STRIPE_SECRET_KEY

@@ -497,30 +497,106 @@ class VeritasApp {
     this.navigateTo('login');
   }
 
-  openAccountRequestEmail() {
-    // Email details
-    const adminEmail = 'admin@veritasdocs.com'; // You can configure this
-    const subject = 'Request New Account - Veritas Documents';
-    const body = `Dear Administrator,
+  showInviteModal() {
+    const modal = document.createElement('div');
+    modal.className = 'modal';
+    modal.innerHTML = `
+      <div class="modal-content">
+        <div class="modal-header">
+          <h3 class="modal-title">Invite New User</h3>
+          <button class="modal-close" onclick="this.closest('.modal').remove()">&times;</button>
+        </div>
+        <div class="modal-body">
+          <form id="invite-form">
+            <div class="form-group">
+              <label class="label" for="invite-email">Email Address</label>
+              <input type="email" id="invite-email" class="input" placeholder="user@example.com" required>
+            </div>
+            <div class="form-group">
+              <label>
+                <input type="checkbox" id="invite-message"> Include personal message
+              </label>
+            </div>
+            <div class="form-group" id="message-group" style="display: none;">
+              <label class="label" for="invite-message-text">Personal Message (optional)</label>
+              <textarea id="invite-message-text" class="textarea" placeholder="Add a personal message to your invitation..."></textarea>
+            </div>
+            <button type="submit" class="btn btn-primary" style="width: 100%;">Send Invitation</button>
+          </form>
+        </div>
+      </div>
+    `;
 
-I am requesting a new account for Veritas Documents.
+    document.body.appendChild(modal);
+    
+    // Show message field when checkbox is checked
+    document.getElementById('invite-message').addEventListener('change', (e) => {
+      document.getElementById('message-group').style.display = e.target.checked ? 'block' : 'none';
+    });
 
-Account Details:
-- Email Address: [Please enter the email address you want associated with this account]
-- Reason for Request: [Please explain why you need access to Veritas Documents]
+    document.getElementById('invite-form').addEventListener('submit', (e) => {
+      e.preventDefault();
+      this.handleSendInvite();
+    });
+  }
 
-Please note: This email is being sent from the email address that should be connected to the requested account.
+  async handleSendInvite() {
+    const email = document.getElementById('invite-email').value;
+    const includeMessage = document.getElementById('invite-message').checked;
+    const message = includeMessage ? document.getElementById('invite-message-text').value : '';
 
-Thank you for your consideration.
+    try {
+      // Create authorization header
+      const token = btoa(`${this.currentUser.email}:${this.getStoredPrivateKey()}`);
+      
+      const response = await fetch('/api/auth/send-invite', {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ email }),
+      });
+
+      const result = await response.json();
+      if (result.success) {
+        // Close modal
+        document.querySelector('.modal').remove();
+        
+        // Show success message
+        this.showAlert('success', 'Invitation sent successfully!');
+        
+        // Optionally send email with the invitation link
+        if (includeMessage) {
+          this.sendInviteEmail(email, result.data.activationUrl, message);
+        }
+      } else {
+        this.showAlert('error', result.error || 'Failed to send invitation');
+      }
+    } catch (error) {
+      this.showAlert('error', 'Network error. Please try again.');
+    }
+  }
+
+  sendInviteEmail(email, activationUrl, message) {
+    const subject = 'You\'ve been invited to join Veritas Documents';
+    const body = `${message ? message + '\n\n' : ''}You've been invited to join Veritas Documents, a secure platform for storing legal documents as NFTs.
+
+Click here to activate your account: ${activationUrl}
+
+This invitation will expire in 7 days.
 
 Best regards,
-[Your Name]`;
+${this.currentUser.email}`;
 
-    // Create the mailto link
-    const mailtoLink = `mailto:${adminEmail}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
-    
-    // Open the email client
-    window.location.href = mailtoLink;
+    const mailtoLink = `mailto:${email}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+    window.open(mailtoLink);
+  }
+
+  getStoredPrivateKey() {
+    // In a real app, this would be stored securely (encrypted in localStorage or using a password manager)
+    // For now, we'll prompt the user to enter it when needed
+    return prompt('Please enter your private key to authorize this action:');
   }
 
   showAlert(type, message) {

@@ -47,8 +47,8 @@ Write-Host ""
 Write-Host "💾 Storing user in KV store..." -ForegroundColor Yellow
 
 # Email to user ID mapping
-$emailKeyCommand = "wrangler kv:key put `"user:email:$Email`" `"$userId`" --binding VERITAS_KV --env $Environment"
-$userDataCommand = "wrangler kv:key put `"user:$userId`" `"$userData`" --binding VERITAS_KV --env $Environment"
+$emailKeyCommand = "npx wrangler kv key put `"user:email:$Email`" `"$userId`" --binding VERITAS_KV --env $Environment --remote"
+$userDataCommand = "npx wrangler kv key put `"user:$userId`" '$userData' --binding VERITAS_KV --env $Environment --remote"
 
 Write-Host "Running: $emailKeyCommand" -ForegroundColor Gray
 Invoke-Expression $emailKeyCommand

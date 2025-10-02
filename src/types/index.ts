@@ -35,7 +35,8 @@ export interface Asset {
 export interface OneTimeLink {
   id: string;
   token: string;
-  createdBy: string;
+  createdBy: string; // user ID or 'admin'
+  inviteType: 'admin' | 'user';
   email: string;
   expiresAt: number;
   used: boolean;

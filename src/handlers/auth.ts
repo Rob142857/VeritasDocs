@@ -5,6 +5,50 @@ import { initializeVeritasChain, addUserToChain } from '../utils/blockchain';
 
 const authHandler = new Hono<{ Bindings: Environment }>();
 
+// Helper function to authenticate user from request headers
+async function authenticateUser(c: any): Promise<User | null> {
+  const env = c.env;
+  const authHeader = c.req.header('Authorization');
+  
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return null;
+  }
+  
+  const token = authHeader.substring(7); // Remove 'Bearer ' prefix
+  
+  // For now, we'll use a simple token format: email:privateKey (base64 encoded)
+  // In production, this should be a proper JWT or session token
+  try {
+    const decoded = atob(token);
+    const [email, privateKey] = decoded.split(':');
+    
+    if (!email || !privateKey) return null;
+    
+    // Get user ID from email
+    const userId = await env.VERITAS_KV.get(`user:email:${email}`);
+    if (!userId) return null;
+
+    // Get user data
+    const userData = await env.VERITAS_KV.get(`user:${userId}`);
+    if (!userData) return null;
+
+    const user: User = JSON.parse(userData);
+
+    // Verify the private key
+    if (user.encryptedPrivateData.startsWith('prod-encrypted-data-')) {
+      const expectedPrivateKey = user.encryptedPrivateData.replace('prod-encrypted-data-', '');
+      if (privateKey !== expectedPrivateKey) return null;
+    } else {
+      const maataraClient = new MaataraClient(env);
+      await maataraClient.decryptData(user.encryptedPrivateData, privateKey);
+    }
+    
+    return user;
+  } catch (error) {
+    return null;
+  }
+}
+
 // Generate one-time account creation link (admin only)
 authHandler.post('/create-link', async (c) => {
   try {
@@ -28,6 +72,7 @@ authHandler.post('/create-link', async (c) => {
       id: linkId,
       token,
       createdBy: 'admin',
+      inviteType: 'admin',
       email,
       expiresAt,
       used: false,
@@ -44,6 +89,62 @@ authHandler.post('/create-link', async (c) => {
     });
   } catch (error) {
     console.error('Error creating one-time link:', error);
+    return c.json<APIResponse>({ success: false, error: 'Internal server error' }, 500);
+  }
+});
+
+// Send invitation to create account (user endpoint)
+authHandler.post('/send-invite', async (c) => {
+  try {
+    const env = c.env;
+    const { email } = await c.req.json();
+
+    if (!email) {
+      return c.json<APIResponse>({ success: false, error: 'Email is required' }, 400);
+    }
+
+    // Authenticate the user
+    const sender = await authenticateUser(c);
+    if (!sender) {
+      return c.json<APIResponse>({ success: false, error: 'Authentication required' }, 401);
+    }
+
+    // Check if user already exists
+    const existingUserId = await env.VERITAS_KV.get(`user:email:${email}`);
+    if (existingUserId) {
+      return c.json<APIResponse>({ success: false, error: 'User with this email already exists' }, 400);
+    }
+
+    // Check if invitation already exists
+    const existingInvitePattern = `link:*`;
+    // Note: In production, you'd want to scan for existing invites to this email
+    // For now, we'll just create a new one
+
+    const linkId = generateId();
+    const token = crypto.randomUUID();
+    const expiresAt = Date.now() + (7 * 24 * 60 * 60 * 1000); // 7 days
+
+    const oneTimeLink: OneTimeLink = {
+      id: linkId,
+      token,
+      createdBy: sender.id,
+      inviteType: 'user',
+      email,
+      expiresAt,
+      used: false,
+    };
+
+    await env.VERITAS_KV.put(`link:${token}`, JSON.stringify(oneTimeLink));
+
+    const activationUrl = `${c.req.url.split('/api')[0]}/activate?token=${token}`;
+
+    return c.json<APIResponse>({
+      success: true,
+      data: { activationUrl, expiresAt },
+      message: 'Invitation sent successfully',
+    });
+  } catch (error) {
+    console.error('Error sending invitation:', error);
     return c.json<APIResponse>({ success: false, error: 'Internal server error' }, 500);
   }
 });
@@ -99,8 +200,9 @@ authHandler.post('/activate', async (c) => {
       publicKey: keyPair.publicKey,
       encryptedPrivateData: encryptedUserData,
       createdAt: Date.now(),
+      invitedBy: oneTimeLink.inviteType === 'user' ? oneTimeLink.createdBy : undefined,
       hasActivated: true,
-      accountType: 'paid', // First account is always paid
+      accountType: oneTimeLink.inviteType === 'admin' ? 'paid' : 'invited',
     };
 
     // Save user to KV
@@ -164,8 +266,16 @@ authHandler.post('/login', async (c) => {
 
     // Verify the private key can decrypt the user's data
     try {
-      const maataraClient = new MaataraClient(env);
-      await maataraClient.decryptData(user.encryptedPrivateData, privateKey);
+      // Special handling for admin users created via script (encryptedPrivateData starts with "prod-encrypted-data-")
+      if (user.encryptedPrivateData.startsWith('prod-encrypted-data-')) {
+        const expectedPrivateKey = user.encryptedPrivateData.replace('prod-encrypted-data-', '');
+        if (privateKey !== expectedPrivateKey) {
+          return c.json<APIResponse>({ success: false, error: 'Invalid private key' }, 401);
+        }
+      } else {
+        const maataraClient = new MaataraClient(env);
+        await maataraClient.decryptData(user.encryptedPrivateData, privateKey);
+      }
     } catch (error) {
       return c.json<APIResponse>({ success: false, error: 'Invalid private key' }, 401);
     }

@@ -1,40 +1,63 @@
-// IPFS utilities using Cloudflare IPFS Gateway
+// IPFS utilities using Cloudflare IPFS Gateway for reading and Pinata for pinning
 import { Environment } from '../types';
 
 export class IPFSClient {
   private gatewayUrl: string;
+  private pinataApiKey?: string;
+  private pinataSecretKey?: string;
 
   constructor(env: Environment) {
-    // Use Cloudflare's IPFS gateway
-    this.gatewayUrl = 'https://cloudflare-ipfs.com';
+    // Use Cloudflare's IPFS gateway for reading
+    this.gatewayUrl = env.IPFS_GATEWAY_URL || 'https://cloudflare-ipfs.com';
+    
+    // Use Pinata for uploading/pinning if configured
+    this.pinataApiKey = env.PINATA_API_KEY;
+    this.pinataSecretKey = env.PINATA_SECRET_KEY;
   }
 
   /**
-   * Upload data to IPFS via Cloudflare gateway
-   * This uses the standard IPFS HTTP API compatible with Cloudflare
+   * Upload data to IPFS via Pinata (pinning service)
+   * Cloudflare gateway is read-only, so we use Pinata for uploads
    */
   async uploadToIPFS(data: string | Uint8Array): Promise<string> {
     try {
-      // Convert string to Uint8Array if needed
-      const dataBytes = typeof data === 'string' ? new TextEncoder().encode(data) : data;
-      
-      // Create form data for IPFS upload
-      const formData = new FormData();
-      const blob = new Blob([dataBytes], { type: 'application/octet-stream' });
-      formData.append('file', blob);
+      if (!this.pinataApiKey || !this.pinataSecretKey) {
+        throw new Error('Pinata API keys not configured. Please set PINATA_API_KEY and PINATA_SECRET_KEY environment variables.');
+      }
 
-      // Upload to IPFS using Cloudflare's gateway API
-      const response = await fetch(`${this.gatewayUrl}/api/v0/add`, {
+      // Convert data to the format Pinata expects
+      let content: any;
+      if (typeof data === 'string') {
+        // For JSON/text content
+        content = { data };
+      } else {
+        // For binary data, we'd need to use pinFileToIPFS instead
+        throw new Error('Binary file uploads not yet implemented. Use pinFileToIPFS for files.');
+      }
+
+      // Upload to IPFS using Pinata
+      const response = await fetch('https://api.pinata.cloud/pinning/pinJSONToIPFS', {
         method: 'POST',
-        body: formData,
+        headers: {
+          'Content-Type': 'application/json',
+          'pinata_api_key': this.pinataApiKey,
+          'pinata_secret_api_key': this.pinataSecretKey,
+        },
+        body: JSON.stringify({
+          pinataContent: content,
+          pinataMetadata: {
+            name: `veritas-document-${Date.now()}`,
+          },
+        }),
       });
 
       if (!response.ok) {
-        throw new Error(`IPFS upload failed: ${response.statusText}`);
+        const errorText = await response.text();
+        throw new Error(`Pinata upload failed: ${response.status} ${errorText}`);
       }
 
-      const result = await response.json() as { Hash: string };
-      return result.Hash; // Return the IPFS hash
+      const result: { IpfsHash: string } = await response.json();
+      return result.IpfsHash; // Return the IPFS hash
     } catch (error) {
       console.error('IPFS upload error:', error);
       throw new Error(`Failed to upload to IPFS: ${error instanceof Error ? error.message : 'Unknown error'}`);
@@ -60,14 +83,39 @@ export class IPFSClient {
   }
 
   /**
-   * Pin content to ensure it stays available
-   * This would typically require IPFS pinning service API
+   * Pin content to ensure it stays available using Pinata
    */
   async pinToIPFS(hash: string): Promise<boolean> {
     try {
-      // In a production setup, you'd use a pinning service like Pinata or Cloudflare's pinning
-      // For now, we'll return true as a placeholder
-      console.log(`Pinning ${hash} to IPFS`);
+      if (!this.pinataApiKey || !this.pinataSecretKey) {
+        console.warn('Pinata API keys not configured. Content will not be pinned.');
+        return false;
+      }
+
+      // Pin the content using Pinata
+      const response = await fetch(`https://api.pinata.cloud/pinning/pinByHash`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'pinata_api_key': this.pinataApiKey,
+          'pinata_secret_api_key': this.pinataSecretKey,
+        },
+        body: JSON.stringify({
+          hashToPin: hash,
+          pinataMetadata: {
+            name: `veritas-document-${Date.now()}`,
+          },
+        }),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error(`Pinata pinning failed: ${response.status} ${errorText}`);
+        return false;
+      }
+
+      const result = await response.json();
+      console.log(`Successfully pinned ${hash} to IPFS via Pinata`);
       return true;
     } catch (error) {
       console.error('IPFS pinning error:', error);

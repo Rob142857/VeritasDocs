@@ -374,45 +374,141 @@ class VeritasApp {
     };
 
     try {
+      this.showAlert('info', 'Initializing post-quantum cryptography...');
+      
+      // Step 1: Initialize PQC WASM
+      console.log('Initializing PQC for key generation...');
+      await window.VeritasCrypto.ensureCryptoReady();
+      
+      // Step 2: Generate keypairs CLIENT-SIDE (zero-knowledge!)
+      console.log('Generating post-quantum keypairs...');
+      const keypairs = await window.VeritasCrypto.generateClientKeypair();
+      
+      console.log('Keypairs generated successfully');
+      
+      // Step 3: Get email from server (via token lookup)
+      const tokenResponse = await fetch(`/api/auth/token-info?token=${token}`);
+      const tokenData = await tokenResponse.json();
+      
+      if (!tokenData.success) {
+        this.showAlert('error', 'Invalid activation token');
+        return;
+      }
+      
+      const userEmail = tokenData.data.email;
+      
+      // Step 4: Encrypt user data with their OWN public key
+      const userData = {
+        email: userEmail,
+        personalDetails,
+        preferences: {},
+        createdAt: Date.now()
+      };
+      
+      console.log('Encrypting user data...');
+      const encryptedUserData = await window.VeritasCrypto.encryptDocumentData(
+        JSON.stringify(userData),
+        keypairs.kyberPublicKey
+      );
+      console.log('User data encrypted');
+      
+      // Step 5: Sign the blockchain transaction
+      console.log('Signing blockchain transaction...');
+      const dataToSign = JSON.stringify({
+        kyberPublicKey: keypairs.kyberPublicKey,
+        dilithiumPublicKey: keypairs.dilithiumPublicKey,
+        encryptedUserData,
+        timestamp: Date.now()
+      });
+      
+      const signature = await window.VeritasCrypto.signData(
+        dataToSign,
+        keypairs.dilithiumPrivateKey
+      );
+      console.log('Transaction signed');
+      
+      // Step 6: Send to server (NO PRIVATE KEYS!)
       const response = await fetch('/api/auth/activate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ token, personalDetails }),
+        body: JSON.stringify({
+          token,
+          kyberPublicKey: keypairs.kyberPublicKey,
+          dilithiumPublicKey: keypairs.dilithiumPublicKey,
+          encryptedUserData,
+          signature
+        }),
       });
 
       const result = await response.json();
+      
       if (result.success) {
-        // Show success message with keys
+        // Step 7: Display keys and send email
         const content = document.getElementById('content');
         content.innerHTML = `
-          <div class="card" style="max-width: 600px; margin: 2rem auto;">
+          <div class="card" style="max-width: 700px; margin: 2rem auto;">
             <div class="alert alert-success">
-              <strong>Account activated successfully!</strong> Please save your keys securely.
+              <strong>✅ Account activated successfully!</strong>
+            </div>
+            
+            <div class="alert alert-warning">
+              <strong>⚠️ CRITICAL: Save Your Keys Now!</strong>
+              <p>Your private keys are generated on YOUR device only. We CANNOT recover them if lost.</p>
             </div>
             
             <div class="card-header">
-              <h2 class="card-title">Your Account Credentials</h2>
-              <p class="card-subtitle">Save these securely - you cannot recover them later</p>
+              <h2 class="card-title">Your Cryptographic Keys</h2>
+              <p class="card-subtitle">Store these in a password manager immediately</p>
             </div>
             
             <div class="form-group">
-              <label class="label">Public Key</label>
-              <textarea class="textarea" readonly>${result.data.publicKey}</textarea>
+              <label class="label">📧 Email Address</label>
+              <input type="text" class="input" readonly value="${userEmail}">
             </div>
             
             <div class="form-group">
-              <label class="label">Private Key (Keep Secret!)</label>
-              <textarea class="textarea" readonly>${result.data.privateKey}</textarea>
+              <label class="label">🔓 Kyber Public Key (Encryption)</label>
+              <textarea class="textarea" readonly rows="3">${keypairs.kyberPublicKey}</textarea>
             </div>
             
             <div class="form-group">
-              <label class="label">Recovery Phrase (Keep Secret!)</label>
-              <textarea class="textarea" readonly>${result.data.recoveryPhrase}</textarea>
+              <label class="label">🔐 Kyber Private Key (Keep Secret!)</label>
+              <textarea class="textarea" readonly rows="3">${keypairs.kyberPrivateKey}</textarea>
+              <small style="color: #dc2626;">⚠️ Required to decrypt your documents</small>
             </div>
             
-            <button id="continue-login" class="btn btn-primary" style="width: 100%;">Continue to Login</button>
+            <div class="form-group">
+              <label class="label">✍️ Dilithium Public Key (Signatures)</label>
+              <textarea class="textarea" readonly rows="3">${keypairs.dilithiumPublicKey}</textarea>
+            </div>
+            
+            <div class="form-group">
+              <label class="label">🖊️ Dilithium Private Key (Keep Secret!)</label>
+              <textarea class="textarea" readonly rows="3">${keypairs.dilithiumPrivateKey}</textarea>
+              <small style="color: #dc2626;">⚠️ Required to sign transactions</small>
+            </div>
+            
+            <div class="form-group">
+              <label class="label">🔑 Recovery Phrase (Keep Secret!)</label>
+              <textarea class="textarea" readonly rows="2">${result.data.recoveryPhrase}</textarea>
+              <small style="color: #dc2626;">⚠️ Backup recovery method - write this down!</small>
+            </div>
+            
+            <div style="display: flex; gap: 1rem; margin-top: 2rem;">
+              <button id="download-keys" class="btn btn-secondary" style="flex: 1;">
+                � Download Keys (JSON)
+              </button>
+              <button id="continue-login" class="btn btn-primary" style="flex: 1;">
+                Continue to Login →
+              </button>
+            </div>
           </div>
         `;
+
+        // Download keys functionality
+        document.getElementById('download-keys').addEventListener('click', () => {
+          this.downloadPrivateKeys(userEmail, keypairs, result.data.recoveryPhrase, result.data.userId);
+        });
 
         document.getElementById('continue-login').addEventListener('click', () => {
           this.navigateTo('login');
@@ -421,8 +517,85 @@ class VeritasApp {
         this.showAlert('error', result.error || 'Activation failed');
       }
     } catch (error) {
-      this.showAlert('error', 'Network error. Please try again.');
+      console.error('Activation error:', error);
+      this.showAlert('error', 'Activation error: ' + error.message);
     }
+  }
+  
+  downloadPrivateKeys(email, keypairs, recoveryPhrase, userId) {
+    // Create comprehensive key export
+    const keyExport = {
+      // Metadata
+      exportType: 'Veritas Documents - Private Keys',
+      version: '1.0',
+      exportDate: new Date().toISOString(),
+      
+      // User Info
+      userId: userId,
+      email: email,
+      
+      // WARNING
+      WARNING: '⚠️ KEEP THIS FILE SECURE! These private keys grant full access to your account and documents.',
+      
+      // Cryptographic Keys
+      keys: {
+        kyber: {
+          publicKey: keypairs.kyberPublicKey,
+          privateKey: keypairs.kyberPrivateKey,
+          purpose: 'Encryption/Decryption of documents'
+        },
+        dilithium: {
+          publicKey: keypairs.dilithiumPublicKey,
+          privateKey: keypairs.dilithiumPrivateKey,
+          purpose: 'Digital signatures for blockchain transactions'
+        }
+      },
+      
+      // Recovery
+      recoveryPhrase: recoveryPhrase,
+      
+      // Instructions
+      instructions: {
+        storage: 'Store this file in a secure password manager (1Password, Bitwarden, etc.)',
+        backup: 'Keep multiple secure backups in different locations',
+        security: [
+          'Never share your private keys with anyone',
+          'Veritas Documents cannot recover lost keys',
+          'Delete this file after importing to password manager',
+          'If compromised, your documents and account are at risk'
+        ],
+        usage: {
+          login: 'Use the Kyber private key to login and decrypt documents',
+          signing: 'Dilithium private key is used automatically for blockchain transactions',
+          recovery: 'Recovery phrase can restore access if keys are lost (future feature)'
+        }
+      }
+    };
+    
+    // Convert to formatted JSON
+    const jsonString = JSON.stringify(keyExport, null, 2);
+    
+    // Create blob
+    const blob = new Blob([jsonString], { type: 'application/json' });
+    
+    // Create download link
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    
+    // Generate filename with timestamp
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
+    link.download = `veritas-keys-${email.replace('@', '-at-')}-${timestamp}.json`;
+    
+    // Trigger download
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    
+    // Clean up blob URL
+    URL.revokeObjectURL(url);
+    
+    this.showAlert('success', '🔐 Keys downloaded! Store this file securely in your password manager.');
   }
 
   async loadUserAssets() {

@@ -25,9 +25,16 @@ async function ensureCryptoReady(): Promise<void> {
   if (wasmInitialized) return;
   
   try {
-    // Initialize WASM with the new API (single object parameter)
+    // Fetch the WASM file and pass it to initWasm
     const wasmUrl = '/static/core_pqc_wasm_bg.wasm';
-    await initWasm({ url: wasmUrl });
+    const wasmResponse = await fetch(wasmUrl);
+    
+    if (!wasmResponse.ok) {
+      throw new Error(`Failed to fetch WASM file: ${wasmResponse.statusText}`);
+    }
+    
+    // Pass the Response object directly to initWasm
+    await initWasm(wasmResponse);
     wasmInitialized = true;
     console.log('✓ Post-quantum cryptography initialized');
   } catch (error) {
@@ -128,9 +135,8 @@ export async function generateClientKeypair(): Promise<{
     const testMessageB64u = b64uEncode(new TextEncoder().encode(testMessage));
     
     try {
-      // Decode the secret key from base64url to bytes for the WASM function
-      const secretKeyBytes = b64uDecode(dilithiumResult.secret_b64u);
-      const testSignResult = await (dilithiumSign as any)(testMessageB64u, secretKeyBytes);
+      // Dilithium functions expect base64url STRINGS, not bytes!
+      const testSignResult = await (dilithiumSign as any)(testMessageB64u, dilithiumResult.secret_b64u);
       console.log('Dilithium test sign result:', testSignResult);
       
       if (testSignResult.error) {
@@ -138,7 +144,7 @@ export async function generateClientKeypair(): Promise<{
         throw new Error('Dilithium key test failed: ' + testSignResult.error);
       }
       
-      // Test verification
+      // Test verification - also expects base64url strings
       const testVerifyResult = await (dilithiumVerify as any)(testMessageB64u, testSignResult.signature_b64u, dilithiumResult.public_b64u);
       console.log('Dilithium test verify result:', testVerifyResult);
       
@@ -170,7 +176,7 @@ export async function generateClientKeypair(): Promise<{
 export async function signData(data: string, dilithiumSecretB64u: string): Promise<string> {
   await ensureCryptoReady();
   
-  // For now, don't use JCS canonicalization - use the data as-is like the README example
+  // Encode the message to base64url
   const messageB64u = b64uEncode(new TextEncoder().encode(data));
   
   console.log('Attempting to sign with Dilithium...');
@@ -178,12 +184,9 @@ export async function signData(data: string, dilithiumSecretB64u: string): Promi
   console.log('Message b64u length:', messageB64u.length);
   console.log('Data preview:', data.substring(0, 100));
   
-  // Decode the secret key from base64url to bytes for the WASM function
-  const secretKeyBytes = b64uDecode(dilithiumSecretB64u);
-  console.log('Secret key bytes length:', secretKeyBytes.length);
-  
-  // IMPORTANT: dilithiumSign takes (messageB64u, secretKeyBytes) - message FIRST, secret key as bytes!
-  const signResult = await (dilithiumSign as any)(messageB64u, secretKeyBytes);
+  // IMPORTANT: dilithiumSign expects base64url STRINGS, not bytes!
+  // The Ma'atara library handles conversion internally
+  const signResult = await (dilithiumSign as any)(messageB64u, dilithiumSecretB64u);
   
   console.log('Sign result:', signResult);
   
@@ -201,10 +204,8 @@ export async function verifySignature(data: string, signature: string, dilithium
   
   const messageB64u = b64uEncode(new TextEncoder().encode(data));
   
-  // Decode the public key from base64url to bytes for the WASM function
-  const publicKeyBytes = b64uDecode(dilithiumPublicKey);
-  
-  const verifyResult = await (dilithiumVerify as any)(messageB64u, signature, publicKeyBytes);
+  // IMPORTANT: dilithiumVerify expects base64url STRINGS, not bytes!
+  const verifyResult = await (dilithiumVerify as any)(messageB64u, signature, dilithiumPublicKey);
   
   if (verifyResult.error) return false;
   

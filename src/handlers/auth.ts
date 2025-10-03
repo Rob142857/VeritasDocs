@@ -49,6 +49,45 @@ async function authenticateUser(c: any): Promise<User | null> {
   }
 }
 
+// Get token info (for frontend to retrieve email)
+authHandler.get('/token-info', async (c) => {
+  try {
+    const env = c.env;
+    const token = c.req.query('token');
+    
+    if (!token) {
+      return c.json<APIResponse>({ success: false, error: 'Token is required' }, 400);
+    }
+    
+    // Get one-time link
+    const linkData = await env.VERITAS_KV.get(`link:${token}`);
+    if (!linkData) {
+      return c.json<APIResponse>({ success: false, error: 'Invalid or expired token' }, 400);
+    }
+
+    const oneTimeLink: OneTimeLink = JSON.parse(linkData);
+
+    if (oneTimeLink.used) {
+      return c.json<APIResponse>({ success: false, error: 'Token has already been used' }, 400);
+    }
+
+    if (oneTimeLink.expiresAt < Date.now()) {
+      return c.json<APIResponse>({ success: false, error: 'Token has expired' }, 400);
+    }
+
+    return c.json<APIResponse>({
+      success: true,
+      data: { 
+        email: oneTimeLink.email,
+        inviteType: oneTimeLink.inviteType
+      },
+    });
+  } catch (error) {
+    console.error('Error getting token info:', error);
+    return c.json<APIResponse>({ success: false, error: 'Internal server error' }, 500);
+  }
+});
+
 // Generate one-time account creation link (admin only)
 authHandler.post('/create-link', async (c) => {
   try {

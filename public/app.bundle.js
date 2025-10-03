@@ -551,7 +551,11 @@
     if (wasmInitialized) return;
     try {
       const wasmUrl = "/static/core_pqc_wasm_bg.wasm";
-      await initWasm({ url: wasmUrl });
+      const wasmResponse = await fetch(wasmUrl);
+      if (!wasmResponse.ok) {
+        throw new Error(`Failed to fetch WASM file: ${wasmResponse.statusText}`);
+      }
+      await initWasm(wasmResponse);
       wasmInitialized = true;
       console.log("\u2713 Post-quantum cryptography initialized");
     } catch (error) {
@@ -609,8 +613,7 @@
       const testMessage = "test message for dilithium";
       const testMessageB64u = b64uEncode(new TextEncoder().encode(testMessage));
       try {
-        const secretKeyBytes = b64uDecode(dilithiumResult.secret_b64u);
-        const testSignResult = await dilithiumSign(testMessageB64u, secretKeyBytes);
+        const testSignResult = await dilithiumSign(testMessageB64u, dilithiumResult.secret_b64u);
         console.log("Dilithium test sign result:", testSignResult);
         if (testSignResult.error) {
           console.error("Dilithium test sign failed:", testSignResult.error);
@@ -646,9 +649,7 @@
     console.log("Secret key b64u length:", dilithiumSecretB64u.length);
     console.log("Message b64u length:", messageB64u.length);
     console.log("Data preview:", data.substring(0, 100));
-    const secretKeyBytes = b64uDecode(dilithiumSecretB64u);
-    console.log("Secret key bytes length:", secretKeyBytes.length);
-    const signResult = await dilithiumSign(messageB64u, secretKeyBytes);
+    const signResult = await dilithiumSign(messageB64u, dilithiumSecretB64u);
     console.log("Sign result:", signResult);
     if (signResult.error) {
       console.error("Dilithium sign error:", signResult.error);
@@ -659,8 +660,7 @@
   async function verifySignature(data, signature, dilithiumPublicKey) {
     await ensureCryptoReady();
     const messageB64u = b64uEncode(new TextEncoder().encode(data));
-    const publicKeyBytes = b64uDecode(dilithiumPublicKey);
-    const verifyResult = await dilithiumVerify(messageB64u, signature, publicKeyBytes);
+    const verifyResult = await dilithiumVerify(messageB64u, signature, dilithiumPublicKey);
     if (verifyResult.error) return false;
     return verifyResult.is_valid === true;
   }

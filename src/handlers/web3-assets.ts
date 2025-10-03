@@ -47,18 +47,30 @@ enhancedAssetHandler.post('/create-web3', async (c) => {
     // Initialize clients
     console.log('Initializing clients...');
     const maataraClient = new MaataraClient(env);
-    console.log('Maatara client initialized');
+    console.log('Maatara client initialized (for signing only)');
     const ipfsClient = new IPFSClient(env);
     console.log('IPFS client initialized');
     const ethereumClient = new EthereumAnchoringClient(env);
     console.log('Ethereum client initialized');
 
-    // 1. Encrypt document data with user's public key
-    console.log('Encrypting document data...');
-    const encryptedData = await maataraClient.encryptData(
-      JSON.stringify(documentData),
-      user.publicKey
-    );
+    // 1. Document data should already be encrypted client-side
+    console.log('Using client-side encrypted document data...');
+    let encryptedData = documentData;
+    
+    // Check if data is already encrypted (has our encryption format)
+    try {
+      const parsed = JSON.parse(documentData);
+      if (parsed.encrypted && parsed.ciphertext) {
+        console.log('Data is already encrypted client-side');
+        encryptedData = documentData;
+      } else {
+        console.warn('Data does not appear to be encrypted, wrapping as-is');
+        encryptedData = JSON.stringify({ plaintext: documentData, encrypted: false });
+      }
+    } catch (e) {
+      console.warn('Data is not JSON, treating as plaintext');
+      encryptedData = JSON.stringify({ plaintext: documentData, encrypted: false });
+    }
 
     // 2. Upload encrypted data to IPFS via Cloudflare (skip if Pinata not configured)
     let ipfsRecord;

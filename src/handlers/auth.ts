@@ -153,10 +153,24 @@ authHandler.post('/send-invite', async (c) => {
 authHandler.post('/activate', async (c) => {
   try {
     const env = c.env;
-    const { token, personalDetails } = await c.req.json();
+    const { 
+      token,
+      kyberPublicKey,
+      dilithiumPublicKey,
+      encryptedUserData, // Already encrypted client-side
+      signature
+    } = await c.req.json();
 
-    if (!token || !personalDetails) {
-      return c.json<APIResponse>({ success: false, error: 'Token and personal details are required' }, 400);
+    if (!token) {
+      return c.json<APIResponse>({ success: false, error: 'Token is required' }, 400);
+    }
+    
+    if (!kyberPublicKey || !dilithiumPublicKey) {
+      return c.json<APIResponse>({ success: false, error: 'Both Kyber and Dilithium public keys are required' }, 400);
+    }
+
+    if (!encryptedUserData || !signature) {
+      return c.json<APIResponse>({ success: false, error: 'Encrypted user data and signature are required' }, 400);
     }
 
     // Get one-time link
@@ -175,34 +189,83 @@ authHandler.post('/activate', async (c) => {
       return c.json<APIResponse>({ success: false, error: 'Token has expired' }, 400);
     }
 
-    // Generate crypto keys
-    const maataraClient = new MaataraClient(env);
-    const keyPair = await maataraClient.generateKeyPair();
+    // Generate recovery phrase (BIP39 mnemonic)
     const recoveryPhrase = generateMnemonic();
 
-    // Encrypt user data with app's public key (for admin access)
-    const userData = {
-      email: oneTimeLink.email,
-      personalDetails,
-      recoveryPhrase,
+    // Create user ID
+    const userId = generateId();
+
+    // Determine account type from invite (NOT user-definable!)
+    const accountType = oneTimeLink.inviteType === 'admin' ? 'admin' : 
+                       oneTimeLink.inviteType === 'user' ? 'invited' : 'paid';
+
+    // Create Veritas blockchain transaction for user registration
+    const blockchainTx = {
+      // PLAINTEXT (public, searchable)
+      type: 'user_registration',
+      userId,
+      email: oneTimeLink.email, // Email in plaintext for lookups
+      kyberPublicKey,
+      dilithiumPublicKey,
+      accountType, // CRITICAL: Set from invite, NOT from user input
+      timestamp: Date.now(),
+      
+      // ENCRYPTED (Kyber-wrapped, only user can decrypt with their private key)
+      encryptedUserData, // Contains: email, personalDetails, preferences
+      
+      // SIGNATURE (Dilithium, proves authenticity)
+      signature
     };
 
-    const encryptedUserData = await maataraClient.encryptData(
-      JSON.stringify(userData),
-      keyPair.publicKey
-    );
+    // Verify the Dilithium signature before storing
+    try {
+      const maataraClient = new MaataraClient(env);
+      const blockDataToVerify = JSON.stringify({
+        kyberPublicKey,
+        dilithiumPublicKey,
+        encryptedUserData,
+        timestamp: blockchainTx.timestamp
+      });
+      
+      const isValid = await maataraClient.verifySignature(
+        blockDataToVerify,
+        signature,
+        dilithiumPublicKey
+      );
+      
+      if (!isValid) {
+        return c.json<APIResponse>({ 
+          success: false, 
+          error: 'Invalid signature - blockchain transaction rejected' 
+        }, 401);
+      }
+    } catch (error) {
+      console.error('Signature verification error:', error);
+      return c.json<APIResponse>({ 
+        success: false, 
+        error: 'Signature verification failed' 
+      }, 500);
+    }
 
-    // Create user
-    const userId = generateId();
+    // Store the blockchain transaction in KV (will migrate to IPFS later)
+    const txId = `tx_${userId}_${Date.now()}`;
+    await env.VERITAS_KV.put(`blockchain:tx:${txId}`, JSON.stringify(blockchainTx));
+    await env.VERITAS_KV.put(`blockchain:user:${userId}`, txId); // Map user to their registration tx
+
+    // Create minimal user record (most data is in encrypted blockchain tx)
     const user: User = {
       id: userId,
       email: oneTimeLink.email,
-      publicKey: keyPair.publicKey,
-      encryptedPrivateData: encryptedUserData,
+      publicKey: kyberPublicKey, // Kyber public key for encryption
+      encryptedPrivateData: JSON.stringify({
+        recoveryPhrase, // Only recovery phrase stored here
+        blockchainTxId: txId, // Reference to blockchain transaction
+        dilithiumPublicKey // For signature verification
+      }),
       createdAt: Date.now(),
       invitedBy: oneTimeLink.inviteType === 'user' ? oneTimeLink.createdBy : undefined,
       hasActivated: true,
-      accountType: oneTimeLink.inviteType === 'admin' ? 'paid' : 'invited',
+      accountType // From invite, NOT user input
     };
 
     // Save user to KV
@@ -214,25 +277,18 @@ authHandler.post('/activate', async (c) => {
     oneTimeLink.usedAt = Date.now();
     await env.VERITAS_KV.put(`link:${token}`, JSON.stringify(oneTimeLink));
 
-    // Add user registration to Veritas blockchain
-    const blockchain = await initializeVeritasChain(env);
-    const txId = await addUserToChain(
-      blockchain,
-      userId,
-      keyPair.publicKey,
-      keyPair.privateKey
-    );
-
     return c.json<APIResponse>({
       success: true,
       data: {
         userId,
-        publicKey: keyPair.publicKey,
-        privateKey: keyPair.privateKey,
+        kyberPublicKey,
+        dilithiumPublicKey,
+        blockchainTxId: txId,
+        accountType, // Return account type so UI knows user permissions
         recoveryPhrase,
-        blockchainTxId: txId
+        message: 'Save both private keys securely! You cannot recover them later.'
       },
-      message: 'Account activated successfully',
+      message: 'Account activated successfully on Veritas blockchain',
     });
   } catch (error) {
     console.error('Error activating account:', error);
@@ -264,27 +320,82 @@ authHandler.post('/login', async (c) => {
 
     const user: User = JSON.parse(userData);
 
-    // Verify the private key can decrypt the user's data
-    try {
-      // Special handling for admin users created via script (encryptedPrivateData starts with "prod-encrypted-data-")
-      if (user.encryptedPrivateData.startsWith('prod-encrypted-data-')) {
-        const expectedPrivateKey = user.encryptedPrivateData.replace('prod-encrypted-data-', '');
-        if (privateKey !== expectedPrivateKey) {
-          return c.json<APIResponse>({ success: false, error: 'Invalid private key' }, 401);
+    // Get blockchain transaction
+    const storedData = JSON.parse(user.encryptedPrivateData);
+    const blockchainTxId = storedData.blockchainTxId;
+    
+    if (!blockchainTxId) {
+      // Legacy user without blockchain tx - try old verification methods
+      try {
+        if (typeof storedData === 'string' && storedData.startsWith('prod-encrypted-data-')) {
+          const expectedPrivateKey = storedData.replace('prod-encrypted-data-', '');
+          if (privateKey !== expectedPrivateKey) {
+            return c.json<APIResponse>({ success: false, error: 'Invalid private key' }, 401);
+          }
+        } else {
+          const maataraClient = new MaataraClient(env);
+          await maataraClient.decryptData(user.encryptedPrivateData, privateKey);
         }
-      } else {
-        const maataraClient = new MaataraClient(env);
-        await maataraClient.decryptData(user.encryptedPrivateData, privateKey);
+      } catch (error) {
+        console.error('Legacy private key verification failed:', error);
+        return c.json<APIResponse>({ success: false, error: 'Invalid private key' }, 401);
       }
-    } catch (error) {
-      return c.json<APIResponse>({ success: false, error: 'Invalid private key' }, 401);
+      
+      return c.json<APIResponse>({
+        success: true,
+        data: { 
+          user,
+          accountType: user.accountType // Include account type for UI
+        },
+        message: 'Login successful (legacy user)',
+      });
     }
 
-    return c.json<APIResponse>({
-      success: true,
-      data: { user },
-      message: 'Login successful',
-    });
+    // New blockchain-based verification
+    const txData = await env.VERITAS_KV.get(`blockchain:tx:${blockchainTxId}`);
+    if (!txData) {
+      return c.json<APIResponse>({ success: false, error: 'Blockchain transaction not found' }, 500);
+    }
+
+    const blockchainTx = JSON.parse(txData);
+
+    // THE KEY VERIFICATION: Try to decrypt the encrypted user data with the provided private key
+    // If decryption succeeds, the user has the correct private key
+    try {
+      const maataraClient = new MaataraClient(env);
+      const decryptedData = await maataraClient.decryptData(
+        blockchainTx.encryptedUserData,
+        privateKey
+      );
+      
+      // Parse decrypted data to verify it's valid
+      const parsedData = JSON.parse(decryptedData);
+      
+      // Verify the email matches (additional security check)
+      if (parsedData.email !== email) {
+        return c.json<APIResponse>({ success: false, error: 'Email mismatch' }, 401);
+      }
+      
+      // Login successful! User proved they have the private key by decrypting their data
+      return c.json<APIResponse>({
+        success: true,
+        data: {
+          user,
+          blockchainTx, // Include blockchain transaction for client verification
+          accountType: user.accountType, // Critical for UI permissions
+          decryptedUserData: parsedData // Return decrypted data to client
+        },
+        message: 'Login successful - blockchain verified',
+      });
+      
+    } catch (error) {
+      console.error('Decryption verification failed:', error);
+      // If decryption fails, the private key is incorrect
+      return c.json<APIResponse>({ 
+        success: false, 
+        error: 'Invalid private key - decryption failed' 
+      }, 401);
+    }
   } catch (error) {
     console.error('Error during login:', error);
     return c.json<APIResponse>({ success: false, error: 'Internal server error' }, 500);

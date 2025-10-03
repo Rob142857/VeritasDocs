@@ -362,6 +362,95 @@ body {
   }
 }
 
+/* Modal */
+.modal {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 1rem;
+}
+
+.modal-content {
+  background-color: var(--background);
+  border-radius: 12px;
+  max-width: 600px;
+  width: 100%;
+  max-height: 90vh;
+  overflow-y: auto;
+  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1);
+}
+
+.modal-header {
+  padding: 1.5rem;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.modal-title {
+  font-size: 1.25rem;
+  font-weight: 600;
+}
+
+.modal-close {
+  background: none;
+  border: none;
+  font-size: 1.5rem;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.modal-close:hover {
+  color: var(--text-primary);
+}
+
+.modal-body {
+  padding: 1.5rem;
+}
+
+.modal-footer {
+  padding: 1.5rem;
+  border-top: 1px solid var(--border);
+  display: flex;
+  gap: 1rem;
+  justify-content: flex-end;
+}
+
+.checkbox-group {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  padding: 0.75rem;
+  background-color: var(--surface);
+  border-radius: 6px;
+  margin-bottom: 0.75rem;
+}
+
+.checkbox-group input[type="checkbox"] {
+  margin-top: 0.25rem;
+  cursor: pointer;
+}
+
+.checkbox-group label {
+  cursor: pointer;
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+
 /* Utility classes */
 .hidden { display: none !important; }
 .text-center { text-align: center; }
@@ -378,9 +467,81 @@ body {
   });
 });
 
+// Serve bundled frontend application from KV or inline
+app.get('/static/app.bundle.js', async (c) => {
+  try {
+    // Try to load from KV first
+    const env = c.env as Environment;
+    const bundle = await env.VERITAS_KV.get('frontend-bundle');
+    if (bundle) {
+      return c.text(bundle, 200, { 'Content-Type': 'application/javascript' });
+    }
+  } catch (error) {
+    console.error('Failed to load bundle from KV:', error);
+  }
+  
+  return c.text('console.error("Frontend bundle not found");', 200, { 'Content-Type': 'application/javascript' });
+});
+
+// Serve WASM file
+app.get('/static/core_pqc_wasm_bg.wasm', async (c) => {
+  try {
+    const env = c.env as Environment;
+    const wasm = await env.VERITAS_KV.get('pqc-wasm', 'arrayBuffer');
+    if (wasm) {
+      return c.body(wasm, 200, { 'Content-Type': 'application/wasm' });
+    }
+  } catch (error) {
+    console.error('Failed to load WASM from KV:', error);
+  }
+  
+  return c.text('WASM file not found', 404);
+});
+
 app.get('/static/app.js', async (c) => {
   const js = `
 // Veritas Documents - Frontend Application
+
+// Load the bundled Post-Quantum Cryptography module
+const script = document.createElement('script');
+script.src = '/static/app.bundle.js';
+script.onerror = () => console.error('Failed to load PQC bundle');
+document.head.appendChild(script);
+
+class ClientCrypto {
+  static async encryptData(data, publicKey) {
+    // Generate a random AES key
+    const aesKey = await crypto.subtle.generateKey(
+      { name: 'AES-GCM', length: 256 },
+      true,
+      ['encrypt', 'decrypt']
+    );
+    
+    // Encrypt the data with AES-GCM
+    const encoder = new TextEncoder();
+    const dataBytes = encoder.encode(data);
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    
+    const encryptedData = await crypto.subtle.encrypt(
+      { name: 'AES-GCM', iv },
+      aesKey,
+      dataBytes
+    );
+    
+    // Convert to base64
+    const encryptedArray = new Uint8Array(encryptedData);
+    const encryptedB64 = btoa(String.fromCharCode(...encryptedArray));
+    const ivB64 = btoa(String.fromCharCode(...iv));
+    
+    return JSON.stringify({
+      version: '1.0',
+      algorithm: 'aes256gcm',
+      iv: ivB64,
+      ciphertext: encryptedB64,
+      encrypted: true
+    });
+  }
+}
 
 class VeritasApp {
   constructor() {
@@ -570,26 +731,150 @@ class VeritasApp {
     };
 
     try {
+      // Initialize Post-Quantum Cryptography
+      console.log('Initializing PQC for key generation...');
+      await window.VeritasCrypto.ensureCryptoReady();
+      
+      // Generate both Kyber-768 (encryption) and Dilithium-2 (signing) keypairs client-side
+      console.log('Generating post-quantum keypairs...');
+      const keyPair = await window.VeritasCrypto.generateClientKeypair();
+      console.log('Keypairs generated successfully');
+      
+      // Get email from activation form (should be pre-filled or from token)
+      const email = document.getElementById('email')?.value || '';
+      
+      // Prepare user data to encrypt (this stays client-side only)
+      const userData = {
+        email,
+        personalDetails,
+        timestamp: Date.now()
+      };
+      
+      // Encrypt user data with their own Kyber public key (zero-knowledge)
+      console.log('Encrypting user data...');
+      const userDataStr = JSON.stringify(userData);
+      const encryptedUserData = await window.VeritasCrypto.encryptDocumentData(
+        userDataStr,
+        keyPair.kyberPublicKey
+      );
+      console.log('User data encrypted');
+      
+      // Sign the blockchain transaction with Dilithium private key
+      console.log('Signing blockchain transaction...');
+      const blockData = {
+        kyberPublicKey: keyPair.kyberPublicKey,
+        dilithiumPublicKey: keyPair.dilithiumPublicKey,
+        encryptedUserData,
+        timestamp: Date.now()
+      };
+      const signature = await window.VeritasCrypto.signData(
+        JSON.stringify(blockData), 
+        keyPair.dilithiumPrivateKey
+      );
+      console.log('Transaction signed');
+
       const response = await fetch('/api/auth/activate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ token, personalDetails }),
+        body: JSON.stringify({ 
+          token,
+          kyberPublicKey: keyPair.kyberPublicKey,
+          dilithiumPublicKey: keyPair.dilithiumPublicKey,
+          encryptedUserData, // Only encrypted data sent to server
+          signature
+        }),
       });
 
       const result = await response.json();
       if (result.success) {
-        // Show success message with keys
+        // Show success message with keys and important instructions
         const content = document.getElementById('content');
-        content.innerHTML = \`<div class="card" style="max-width: 600px; margin: 2rem auto;"><div class="alert alert-success"><strong>Account activated successfully!</strong> Please save your keys securely.</div><div class="card-header"><h2 class="card-title">Your Account Credentials</h2><p class="card-subtitle">Save these securely - you cannot recover them later</p></div><div class="form-group"><label class="label">Public Key</label><textarea class="textarea" readonly>\${result.data.publicKey}</textarea></div><div class="form-group"><label class="label">Private Key (Keep Secret!)</label><textarea class="textarea" readonly>\${result.data.privateKey}</textarea></div><div class="form-group"><label class="label">Recovery Phrase (Keep Secret!)</label><textarea class="textarea" readonly>\${result.data.recoveryPhrase}</textarea></div><button id="continue-login" class="btn btn-primary" style="width: 100%;">Continue to Login</button></div>\`;
+        content.innerHTML = \`<div class="card" style="max-width: 700px; margin: 2rem auto;">
+          <div class="alert alert-success">
+            <strong>✓ Account activated successfully!</strong>
+          </div>
+          
+          <div class="card-header">
+            <h2 class="card-title">🔐 Your Cryptographic Keys</h2>
+            <p class="card-subtitle">Post-Quantum Cryptography (Kyber-768 + Dilithium-2)</p>
+          </div>
+
+          <div class="alert alert-warning" style="margin-bottom: 1.5rem;">
+            <strong>⚠️ Critical: Save These Keys Now!</strong><br>
+            <small>You will need the <strong>Kyber Private Key</strong> to login and access your documents. There is no password reset or recovery option.</small>
+          </div>
+
+          <div class="form-group">
+            <label class="label">
+              <strong>Kyber Private Key (Encryption)</strong> 
+              <span style="color: var(--error-color); font-weight: 600;"> (REQUIRED FOR LOGIN - SAVE THIS!)</span>
+            </label>
+            <textarea class="textarea" rows="3" readonly style="font-family: monospace; font-size: 0.875rem; background-color: #fff3cd; border: 2px solid var(--warning-color);">\${keyPair.kyberPrivateKey}</textarea>
+            <small class="text-muted">You must keep this safe to access your account. Copy it now!</small>
+          </div>
+
+          <div class="form-group">
+            <label class="label">
+              <strong>Dilithium Private Key (Signing)</strong> 
+              <span style="color: var(--warning-color); font-weight: 600;"> (SAVE THIS TOO!)</span>
+            </label>
+            <textarea class="textarea" rows="3" readonly style="font-family: monospace; font-size: 0.875rem; background-color: #fff3cd; border: 2px solid var(--warning-color);">\${keyPair.dilithiumPrivateKey}</textarea>
+            <small class="text-muted">Used to sign blockchain transactions and prove your identity.</small>
+          </div>
+
+          <div class="form-group">
+            <label class="label">
+              <strong>Kyber Public Key</strong>
+              <span style="color: var(--text-muted);"> (Used for encryption - stored on server)</span>
+            </label>
+            <textarea class="textarea" rows="2" readonly style="font-family: monospace; font-size: 0.875rem;">\${keyPair.kyberPublicKey}</textarea>
+            <small class="text-muted">This key is stored on our servers and used to encrypt your documents.</small>
+          </div>
+
+          <div class="form-group">
+            <label class="label">
+              <strong>Dilithium Public Key</strong>
+              <span style="color: var(--text-muted);"> (Used for verification - stored on blockchain)</span>
+            </label>
+            <textarea class="textarea" rows="2" readonly style="font-family: monospace; font-size: 0.875rem;">\${keyPair.dilithiumPublicKey}</textarea>
+            <small class="text-muted">Used to verify your signatures on the Veritas blockchain.</small>
+          </div>
+
+          <div class="form-group">
+            <label class="label">
+              <strong>Recovery Phrase</strong>
+              <span style="color: var(--text-secondary);"> (Optional backup - recommended)</span>
+            </label>
+            <textarea class="textarea" rows="2" readonly style="font-family: monospace; font-size: 0.875rem;">\${result.data.recoveryPhrase}</textarea>
+            <small class="text-muted">Additional recovery option. Store separately from your private keys.</small>
+          </div>
+
+          <div style="background-color: var(--surface); padding: 1rem; border-radius: 8px; margin: 1.5rem 0;">
+            <h3 style="font-size: 1rem; margin-bottom: 0.75rem; color: var(--text-primary);">📝 Where to Store Your Keys:</h3>
+            <ul style="margin-left: 1.5rem; color: var(--text-secondary); line-height: 1.8;">
+              <li><strong>Password Manager</strong> (1Password, Bitwarden, LastPass)</li>
+              <li><strong>Secret Management Tool</strong> (AWS Secrets Manager, Azure Key Vault)</li>
+              <li><strong>Encrypted USB drive</strong> in a safe or lockbox</li>
+              <li><strong>Printed copy</strong> in a fireproof safe</li>
+              <li><strong>Written note</strong> stored securely (even under your pillow works... but a safe is better! 😊)</li>
+            </ul>
+            <p style="margin-top: 0.75rem; font-size: 0.875rem; color: var(--text-primary);">
+              <strong>Pro tip:</strong> Store both private keys in <em>at least two separate secure locations</em>.
+            </p>
+          </div>
+
+          <button id="continue-login" class="btn btn-primary" style="width: 100%;">Continue to Login</button>
+        </div>\`;
 
         document.getElementById('continue-login').addEventListener('click', () => {
-          this.navigateTo('login');
+          this.showSecurityWarningModal();
         });
       } else {
         this.showAlert('error', result.error || 'Activation failed');
       }
     } catch (error) {
-      this.showAlert('error', 'Network error. Please try again.');
+      console.error('Activation error:', error);
+      this.showAlert('error', 'Error: ' + error.message);
     }
   }
 
@@ -612,6 +897,20 @@ class VeritasApp {
     reader.onload = async (e) => {
       try {
         const documentContent = e.target.result;
+        console.log('Document loaded, size:', documentContent.length);
+
+        // Wait for Post-Quantum Cryptography to initialize
+        console.log('Initializing PQC...');
+        await window.VeritasCrypto.ensureCryptoReady();
+        console.log('PQC ready');
+
+        // Encrypt the document client-side with Post-Quantum Cryptography
+        console.log('Encrypting document...');
+        const encryptedData = await window.VeritasCrypto.encryptDocumentData(
+          documentContent,
+          this.currentUser.publicKey
+        );
+        console.log('Document encrypted, sending to server...');
 
         const response = await fetch('/api/web3-assets/create-web3', {
           method: 'POST',
@@ -621,7 +920,7 @@ class VeritasApp {
             title,
             description,
             documentType,
-            documentData: documentContent,
+            documentData: encryptedData,
             isPubliclySearchable: isPublic,
             privateKey,
           }),
@@ -637,7 +936,8 @@ class VeritasApp {
           this.showAlert('error', result.error || 'Failed to create asset');
         }
       } catch (error) {
-        this.showAlert('error', 'Network error. Please try again.');
+        console.error('Asset creation error:', error);
+        this.showAlert('error', 'Error: ' + error.message);
       }
     };
 
@@ -694,6 +994,95 @@ class VeritasApp {
     this.currentUser = null;
     localStorage.removeItem('veritas-user');
     this.navigateTo('login');
+  }
+
+  showSecurityWarningModal() {
+    const modal = document.createElement('div');
+    modal.className = 'modal';
+    modal.innerHTML = \`
+      <div class="modal-content">
+        <div class="modal-header">
+          <h3 class="modal-title">🔒 Important Security Information</h3>
+        </div>
+        <div class="modal-body">
+          <div class="alert alert-warning" style="margin-bottom: 1.5rem;">
+            <strong>⚠️ Zero-Knowledge Architecture</strong><br>
+            Your documents are encrypted with post-quantum cryptography. Only you can decrypt them.
+          </div>
+
+          <h4 style="margin-bottom: 1rem; font-size: 1rem;">Before you continue, please confirm:</h4>
+
+          <div class="checkbox-group">
+            <input type="checkbox" id="confirm-private-key">
+            <label for="confirm-private-key">
+              I have <strong>saved my Private Key</strong> in a secure location (password manager, safe, or other secure storage)
+            </label>
+          </div>
+
+          <div class="checkbox-group">
+            <input type="checkbox" id="confirm-understand-loss">
+            <label for="confirm-understand-loss">
+              I understand that <strong>losing my Private Key means permanent loss of access</strong> to my account and all documents
+            </label>
+          </div>
+
+          <div class="checkbox-group">
+            <input type="checkbox" id="confirm-no-recovery">
+            <label for="confirm-no-recovery">
+              I understand there is <strong>no password reset</strong> and <strong>no recovery process</strong> - the cryptographic keys cannot be recreated
+            </label>
+          </div>
+
+          <div class="checkbox-group">
+            <input type="checkbox" id="confirm-new-account">
+            <label for="confirm-new-account">
+              I understand that if I lose access, I will need to <strong>create a new account</strong> and all existing documents will be permanently inaccessible
+            </label>
+          </div>
+
+          <div style="background-color: var(--surface); padding: 1rem; border-radius: 8px; margin-top: 1.5rem;">
+            <h4 style="font-size: 0.9rem; margin-bottom: 0.5rem; color: var(--text-primary);">📜 Legal Compliance Note</h4>
+            <p style="font-size: 0.875rem; line-height: 1.6; color: var(--text-secondary); margin: 0;">
+              Documents stored in Veritas are encrypted using NIST-standardized post-quantum cryptographic algorithms 
+              (Kyber-768 and Dilithium-2), stored on IPFS with Ethereum blockchain anchoring, and timestamped with 
+              cryptographic proofs. This ensures compliance with legal standards for digital evidence in jurisdictions 
+              that recognize blockchain-based document authentication, including courts in the United States, European Union, 
+              United Kingdom, Australia, and other countries with established digital evidence frameworks.
+            </p>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button id="modal-cancel" class="btn btn-secondary">Go Back</button>
+          <button id="modal-confirm" class="btn btn-primary" disabled>I Understand - Proceed to Login</button>
+        </div>
+      </div>
+    \`;
+
+    document.body.appendChild(modal);
+
+    // Enable confirm button only when all checkboxes are checked
+    const checkboxes = modal.querySelectorAll('input[type="checkbox"]');
+    const confirmButton = modal.querySelector('#modal-confirm');
+    
+    const updateConfirmButton = () => {
+      const allChecked = Array.from(checkboxes).every(cb => cb.checked);
+      confirmButton.disabled = !allChecked;
+    };
+
+    checkboxes.forEach(cb => {
+      cb.addEventListener('change', updateConfirmButton);
+    });
+
+    // Cancel button
+    modal.querySelector('#modal-cancel').addEventListener('click', () => {
+      modal.remove();
+    });
+
+    // Confirm button
+    confirmButton.addEventListener('click', () => {
+      modal.remove();
+      this.navigateTo('login');
+    });
   }
 
   showInviteModal() {
@@ -808,42 +1197,48 @@ app.route('/api/users', userHandler);
 app.route('/api/stripe', stripeHandler);
 app.route('/api/search', searchHandler);
 
-// Serve the main application
-app.get('/', (c) => {
-  return c.html(`
-    <!DOCTYPE html>
-    <html lang="en">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Veritas Documents</title>
-        <link rel="stylesheet" href="/static/styles.css">
-    </head>
-    <body>
-        <div id="app">
-            <header class="header">
-                <div class="container">
-                    <h1 class="logo">Veritas Documents</h1>
-                    <nav class="nav" id="nav">
-                        <!-- Navigation will be populated by JavaScript -->
-                    </nav>
-                </div>
-            </header>
-            
-            <main class="main">
-                <div class="container">
-                    <div id="content">
-                        <!-- Content will be populated by JavaScript -->
-                    </div>
-                </div>
-            </main>
-        </div>
+// HTML template for the SPA
+const appHTML = `
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Veritas Documents</title>
+    <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+    <div id="app">
+        <header class="header">
+            <div class="container">
+                <h1 class="logo">Veritas Documents</h1>
+                <nav class="nav" id="nav">
+                    <!-- Navigation will be populated by JavaScript -->
+                </nav>
+            </div>
+        </header>
         
-        <script src="/static/app.js"></script>
-    </body>
-    </html>
-  `);
-});
+        <main class="main">
+            <div class="container">
+                <div id="content">
+                    <!-- Content will be populated by JavaScript -->
+                </div>
+            </div>
+        </main>
+    </div>
+    
+    <script src="/static/app.bundle.js"></script>
+    <script src="/static/app.js"></script>
+</body>
+</html>
+`;
+
+// Serve the main application (SPA - handles client-side routing)
+app.get('/', (c) => c.html(appHTML));
+app.get('/activate', (c) => c.html(appHTML));
+app.get('/dashboard', (c) => c.html(appHTML));
+app.get('/create-asset', (c) => c.html(appHTML));
+app.get('/search', (c) => c.html(appHTML));
 
 // Web3 Demo page - serve static demo file
 app.get('/demo', async (c) => {

@@ -7,7 +7,7 @@ export interface User {
   createdAt: number;
   invitedBy?: string;
   hasActivated: boolean;
-  accountType: 'paid' | 'invited';
+  accountType: 'admin' | 'paid' | 'invited';
 }
 
 export interface Asset {

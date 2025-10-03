@@ -1,119 +1,219 @@
-// Crypto utilities using Maatara protocol
-import { 
-  initWasm,
-  kyberKeygen,
-  kyberEncaps,
-  kyberDecaps,
-  dilithiumKeygen,
-  dilithiumSign,
-  dilithiumVerify,
-  buildMintPreimage,
-  buildTransferPreimage,
-  buildBlockPreimage,
-  b64uEncode,
-  b64uDecode,
-  aesGcmWrap,
-  aesGcmUnwrap,
-  hkdfSha256
-} from '@maatara/core-pqc';
+// Crypto utilities using Maatara API
 import { Environment } from '../types';
 
-// Initialize WASM once
-let wasmInitialized = false;
-async function ensureWasmInit() {
-  if (!wasmInitialized) {
-    await initWasm();
-    wasmInitialized = true;
+// Base64url encoding/decoding utilities for Cloudflare Workers
+function stringToBase64url(str: string): string {
+  const encoder = new TextEncoder();
+  const bytes = encoder.encode(str);
+  const base64 = btoa(String.fromCharCode(...bytes));
+  return base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+}
+
+function base64urlToString(b64u: string): string {
+  // Add back padding if needed
+  let base64 = b64u.replace(/-/g, '+').replace(/_/g, '/');
+  while (base64.length % 4) {
+    base64 += '=';
   }
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  const decoder = new TextDecoder();
+  return decoder.decode(bytes);
 }
 
 export class MaataraClient {
+  private apiBase: string;
+
   constructor(env: Environment) {
-    // No longer need to store environment variables for direct SDK usage
-    // All crypto operations now use the Maatara SDK directly
+    this.apiBase = env.MAATARA_API_BASE || 'https://maatara-core-worker.rme-6e5.workers.dev';
   }
 
   async generateKeyPair(): Promise<{ publicKey: string; privateKey: string }> {
-    await ensureWasmInit();
-    const keyPair = await kyberKeygen();
+    const response = await fetch(`${this.apiBase}/api/crypto/kyber/keygen`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' }
+    });
+    
+    if (!response.ok) {
+      throw new Error(`Failed to generate key pair: ${response.statusText}`);
+    }
+    
+    const data = await response.json() as any;
     return {
-      publicKey: keyPair.public_b64u,
-      privateKey: keyPair.secret_b64u
+      publicKey: data.public_b64u,
+      privateKey: data.secret_b64u
     };
   }
 
   async encryptData(data: string, publicKey: string): Promise<string> {
-    await ensureWasmInit();
+    // Step 1: Encapsulate shared secret using Kyber
+    const encapsResponse = await fetch(`${this.apiBase}/api/crypto/kyber/encaps`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ public_b64u: publicKey })
+    });
     
-    // Use Kyber for key encapsulation and AES-GCM for data encryption
-    const encapResult = await kyberEncaps(publicKey);
-    const dataB64u = b64uEncode(new TextEncoder().encode(data));
+    if (!encapsResponse.ok) {
+      throw new Error(`Failed to encapsulate: ${encapsResponse.statusText}`);
+    }
     
-    // Derive AES key from shared secret
-    const kdfResult = await hkdfSha256(encapResult.shared_b64u, b64uEncode(new TextEncoder().encode('veritas-aes')));
+    const encapsData = await encapsResponse.json() as any;
+    const sharedSecret = encapsData.shared_b64u;
+    const kemCt = encapsData.kem_ct_b64u;
     
-    // Encrypt data with AES-GCM
-    const aesResult = await aesGcmWrap(
-      kdfResult.key_b64u,
-      dataB64u,
-      b64uEncode(new TextEncoder().encode('veritas-documents'))
-    );
+    // Step 2: Derive AES key from shared secret
+    const infoB64u = stringToBase64url('veritas-aes');
+    const kdfResponse = await fetch(`${this.apiBase}/api/crypto/hkdf`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        secret_b64u: sharedSecret,
+        info_b64u: infoB64u,
+        salt_b64u: '',
+        len: 32
+      })
+    });
     
-    // Return combined result
+    if (!kdfResponse.ok) {
+      throw new Error(`Failed to derive key: ${kdfResponse.statusText}`);
+    }
+    
+    const kdfData = await kdfResponse.json() as any;
+    const aesKey = kdfData.key_b64u;
+    
+    // Step 3: Encrypt data with AES-GCM
+    const dekB64u = stringToBase64url(data);
+    const aadB64u = stringToBase64url('veritas-documents');
+    
+    const aesResponse = await fetch(`${this.apiBase}/api/crypto/aes/wrap`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        key_b64u: aesKey,
+        dek_b64u: dekB64u,
+        aad_b64u: aadB64u
+      })
+    });
+    
+    if (!aesResponse.ok) {
+      throw new Error(`Failed to encrypt: ${aesResponse.statusText}`);
+    }
+    
+    const aesData = await aesResponse.json() as any;
+    
     return JSON.stringify({
-      kem_ct: encapResult.kem_ct_b64u,
-      iv: aesResult.iv_b64u,
-      ciphertext: aesResult.ct_b64u
+      version: '1.0',
+      algorithm: 'kyber768-aes256gcm',
+      kem_ct: kemCt,
+      iv: aesData.iv_b64u,
+      ciphertext: aesData.ct_b64u
     });
   }
 
   async decryptData(encryptedData: string, privateKey: string): Promise<string> {
-    await ensureWasmInit();
-    
     const encData = JSON.parse(encryptedData);
     
-    // Decapsulate shared secret using Kyber
-    const decapResult = await kyberDecaps(privateKey, encData.kem_ct);
+    // Step 1: Decapsulate shared secret using Kyber
+    const decapsResponse = await fetch(`${this.apiBase}/api/crypto/kyber/decaps`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        secret_b64u: privateKey,
+        kem_ct_b64u: encData.kem_ct
+      })
+    });
     
-    // Derive AES key from shared secret
-    const kdfResult = await hkdfSha256(decapResult.shared_b64u, b64uEncode(new TextEncoder().encode('veritas-aes')));
+    if (!decapsResponse.ok) {
+      throw new Error(`Failed to decapsulate: ${decapsResponse.statusText}`);
+    }
     
-    // Decrypt data with AES-GCM
-    const aesResult = await aesGcmUnwrap(
-      kdfResult.key_b64u,
-      encData.iv,
-      encData.ciphertext,
-      b64uEncode(new TextEncoder().encode('veritas-documents'))
-    );
+    const decapsData = await decapsResponse.json() as any;
+    const sharedSecret = decapsData.shared_b64u;
     
-    // Return decrypted data as string - based on README, aesGcm returns dek_b64u
-    return new TextDecoder().decode(b64uDecode(aesResult.dek_b64u));
+    // Step 2: Derive AES key from shared secret
+    const infoB64u = stringToBase64url('veritas-aes');
+    const kdfResponse = await fetch(`${this.apiBase}/api/crypto/hkdf`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        secret_b64u: sharedSecret,
+        info_b64u: infoB64u,
+        salt_b64u: '',
+        len: 32
+      })
+    });
+    
+    if (!kdfResponse.ok) {
+      throw new Error(`Failed to derive key: ${kdfResponse.statusText}`);
+    }
+    
+    const kdfData = await kdfResponse.json() as any;
+    const aesKey = kdfData.key_b64u;
+    
+    // Step 3: Decrypt data with AES-GCM
+    const aadB64u = stringToBase64url('veritas-documents');
+    
+    const aesResponse = await fetch(`${this.apiBase}/api/crypto/aes/unwrap`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        key_b64u: aesKey,
+        iv_b64u: encData.iv,
+        ct_b64u: encData.ciphertext,
+        aad_b64u: aadB64u
+      })
+    });
+    
+    if (!aesResponse.ok) {
+      throw new Error(`Failed to decrypt: ${aesResponse.statusText}`);
+    }
+    
+    const aesData = await aesResponse.json() as any;
+    return base64urlToString(aesData.dek_b64u);
   }
 
   async signData(data: string, privateKey: string): Promise<string> {
-    await ensureWasmInit();
+    const messageB64u = stringToBase64url(data);
     
-    // Encode data to base64url for signing
-    const messageB64u = b64uEncode(new TextEncoder().encode(data));
+    const response = await fetch(`${this.apiBase}/api/crypto/dilithium/sign`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        message_b64u: messageB64u,
+        secret_b64u: privateKey
+      })
+    });
     
-    // Sign with Dilithium
-    const result = await dilithiumSign(messageB64u, privateKey);
+    if (!response.ok) {
+      throw new Error(`Failed to sign data: ${response.statusText}`);
+    }
     
-    return result.signature_b64u;
+    const data_result = await response.json() as any;
+    return data_result.signature_b64u;
   }
 
   async verifySignature(data: string, signature: string, publicKey: string): Promise<boolean> {
-    await ensureWasmInit();
+    const messageB64u = stringToBase64url(data);
     
-    // Encode data to base64url for verification
-    const messageB64u = b64uEncode(new TextEncoder().encode(data));
+    const response = await fetch(`${this.apiBase}/api/crypto/dilithium/verify`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        message_b64u: messageB64u,
+        signature_b64u: signature,
+        public_b64u: publicKey
+      })
+    });
     
-    // Verify with Dilithium
-    const result = await dilithiumVerify(messageB64u, signature, publicKey);
+    if (!response.ok) {
+      throw new Error(`Failed to verify signature: ${response.statusText}`);
+    }
     
-    // Based on README example usage: const ok = await dilithiumVerify(...)
-    // The result appears to be truthy/falsy
-    return !!result;
+    const result = await response.json() as any;
+    return !!result.valid;
   }
 
   async addToChain(transactionData: any): Promise<string> {

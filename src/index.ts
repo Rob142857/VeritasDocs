@@ -876,38 +876,61 @@ class VeritasApp {
   markdownToHtml(markdown) {
     if (!markdown) return '';
 
-    return markdown
-      // Headers
-      .replace(/^### (.*$)/gim, '<h3>$1</h3>')
-      .replace(/^## (.*$)/gim, '<h2>$1</h2>')
-      .replace(/^# (.*$)/gim, '<h1>$1</h1>')
-      
-      // Bold and italic
-      .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-      .replace(/\*(.*?)\*/g, '<em>$1</em>')
-      
-      // Code blocks
-      .replace(/```([\s\S]*?)```/g, '<pre><code>$1</code></pre>')
-      .replace(/`([^`]+)`/g, '<code>$1</code>')
-      
-      // Links
-      .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>')
-      
-      // Lists
-      .replace(/^\* (.*$)/gim, '<li>$1</li>')
-      .replace(/^\d+\. (.*$)/gim, '<li>$1</li>')
-      .replace(/(<li>.*<\/li>\n?)+/g, '<ul>$&</ul>')
-      
-      // Line breaks
-      .replace(/\n\n/g, '</p><p>')
-      .replace(/\n/g, '<br>')
-      
-      // Wrap in paragraph tags
-      .replace(/^(.+?)(<\/p><p>|$)/, '<p>$1</p>')
-      
-      // Clean up empty paragraphs
-      .replace(/<p><\/p>/g, '')
-      .replace(/<p><br><\/p>/g, '');
+    let html = markdown;
+    
+    // Code blocks first (to avoid conflicts)
+    const codeBlockRegex = /\`\`\`[\\s\\S]*?\`\`\`/g;
+    html = html.replace(codeBlockRegex, function(match) {
+      const code = match.slice(3, -3).trim();
+      return '<pre><code>' + code + '</code></pre>';
+    });
+    
+    // Inline code
+    const inlineCodeRegex = /\`([^\`]+)\`/g;
+    html = html.replace(inlineCodeRegex, '<code>$1</code>');
+    
+    // Headers
+    html = html.replace(/^### (.*$)/gim, '<h3>$1</h3>');
+    html = html.replace(/^## (.*$)/gim, '<h2>$1</h2>');
+    html = html.replace(/^# (.*$)/gim, '<h1>$1</h1>');
+    
+    // Bold and italic
+    const boldRegex = /\\*\\*(.*?)\\*\\*/g;
+    const italicRegex = /\\*(.*?)\\*/g;
+    html = html.replace(boldRegex, '<strong>$1</strong>');
+    html = html.replace(italicRegex, '<em>$1</em>');
+    
+    // Links - build regex from string to avoid escaping issues
+    const linkRegex = new RegExp('\\\\[([^\\\\]]+)\\\\]\\\\(([^)]+)\\\\)', 'g');
+    html = html.replace(linkRegex, function(match, text, url) {
+      return '<a href="' + url + '" target="_blank" rel="noopener">' + text + '</a>';
+    });
+    
+    // Lists
+    const bulletRegex = /^\\* (.*$)/gim;
+    const numberRegex = /^\\d+\\. (.*$)/gim;
+    const listWrapRegex = /(<li>.*<\\/li>\\n?)+/g;
+    html = html.replace(bulletRegex, '<li>$1</li>');
+    html = html.replace(numberRegex, '<li>$1</li>');
+    html = html.replace(listWrapRegex, '<ul>$&</ul>');
+    
+    // Line breaks
+    html = html.replace(/\\n\\n/g, '</p><p>');
+    html = html.replace(/\\n/g, '<br>');
+    
+    // Wrap in paragraph
+    html = '<p>' + html + '</p>';
+    
+    // Clean up
+    html = html.replace(/<p><\\/p>/g, '');
+    html = html.replace(/<p>(<h[1-6]>)/g, '$1');
+    html = html.replace(/(<\\/h[1-6]>)<\\/p>/g, '$1');
+    html = html.replace(/<p>(<pre>)/g, '$1');
+    html = html.replace(/(<\\/pre>)<\\/p>/g, '$1');
+    html = html.replace(/<p>(<ul>)/g, '$1');
+    html = html.replace(/(<\\/ul>)<\\/p>/g, '$1');
+    
+    return html;
   }
 
   renderActivationPage(token) {

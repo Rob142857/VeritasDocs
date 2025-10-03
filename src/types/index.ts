@@ -102,6 +102,13 @@ export interface Environment {
   IPFS_GATEWAY_URL: string;
   PINATA_API_KEY?: string;
   PINATA_SECRET_KEY?: string;
+  // VDC System Master Keys (Cloudflare Secrets)
+  SYSTEM_DILITHIUM_PRIVATE_KEY: string;
+  SYSTEM_DILITHIUM_PUBLIC_KEY: string;
+  SYSTEM_KYBER_PRIVATE_KEY: string;
+  SYSTEM_KYBER_PUBLIC_KEY: string;
+  SYSTEM_KEY_VERSION: string;
+  SYSTEM_KEY_ID: string;
 }
 
 export interface APIResponse<T = any> {

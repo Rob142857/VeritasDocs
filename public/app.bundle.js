@@ -609,6 +609,7 @@
         kyberPublicKey: kyberResult.public_b64u,
         kyberPrivateKey: kyberResult.secret_b64u,
         dilithiumPublicKey: dilithiumResult.public_b64u,
+        // Store ONLY the secret_b64u string, just like Kyber
         dilithiumPrivateKey: dilithiumResult.secret_b64u
       };
     } catch (error) {
@@ -616,11 +617,18 @@
       throw error;
     }
   }
-  async function signData(data, dilithiumPrivateKey) {
+  async function signData(data, dilithiumSecretB64u) {
     await ensureCryptoReady();
     const messageB64u = b64uEncode(new TextEncoder().encode(data));
-    const signResult = await dilithiumSign(dilithiumPrivateKey, messageB64u);
-    if (signResult.error) throw new Error(signResult.error);
+    console.log("Attempting to sign with Dilithium...");
+    console.log("Secret key length:", dilithiumSecretB64u.length);
+    console.log("Message length:", messageB64u.length);
+    const signResult = await dilithiumSign(messageB64u, dilithiumSecretB64u);
+    console.log("Sign result:", signResult);
+    if (signResult.error) {
+      console.error("Dilithium sign error:", signResult.error);
+      throw new Error(signResult.error);
+    }
     return signResult.signature_b64u;
   }
   async function verifySignature(data, signature, dilithiumPublicKey) {

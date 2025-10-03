@@ -1,0 +1,1 @@
+This folder contains the built output assets for the worker "veritas-docs" generated at 2025-10-03T00:53:11.077Z.

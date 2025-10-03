@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { Environment, Asset, User, APIResponse } from '../types';
 import { MaataraClient, generateId, uploadToIPFS } from '../utils/crypto';
-import { initializeVeritasChain, addAssetToChain, addAssetTransferToChain } from '../utils/blockchain';
+import { initializeVDC, addDocumentToVDC, addAssetTransferToVDC } from '../utils/blockchain';
 
 const assetHandler = new Hono<{ Bindings: Environment }>();
 
@@ -92,15 +92,26 @@ assetHandler.post('/create', async (c) => {
     assetsList.push(assetId);
     await env.VERITAS_KV.put(userAssetsKey, JSON.stringify(assetsList));
 
-    // Add asset creation to Veritas blockchain
-    const blockchain = await initializeVeritasChain(env);
-    const txId = await addAssetToChain(
+    // Add asset creation to VDC blockchain
+    const blockchain = await initializeVDC(env);
+    
+    // Use IPFS hash as document hash for now
+    // In production, compute SHA-256 of encrypted data
+    const documentHash = ipfsHash;
+    
+    const txId = await addDocumentToVDC(
       blockchain,
       assetId,
-      userId,
+      documentHash,
       ipfsHash,
+      {
+        title,
+        documentType: documentType || 'other',
+        isPubliclySearchable: isPubliclySearchable || false,
+        publicMetadata: publicMetadata || {},
+      },
       privateKey,
-      user.publicKey
+      user.publicKey // Using existing publicKey field
     );
 
     return c.json<APIResponse>({
@@ -279,9 +290,9 @@ assetHandler.post('/transfer', async (c) => {
     newAssetsList.push(assetId);
     await env.VERITAS_KV.put(newOwnerAssetsKey, JSON.stringify(newAssetsList));
 
-    // Add transfer to Veritas blockchain
-    const blockchain = await initializeVeritasChain(env);
-    const txId = await addAssetTransferToChain(
+    // Add transfer to VDC blockchain
+    const blockchain = await initializeVDC(env);
+    const txId = await addAssetTransferToVDC(
       blockchain,
       assetId,
       fromUserId,

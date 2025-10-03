@@ -90,4 +90,8 @@ Thumbs.db
 
 # Temporary files
 tmp/
-temp/
+temp/# VDC System Master Keys (NEVER COMMIT THESE!)
+system-master-keys.json
+.env.system-keys
+setup-cloudflare-secrets.sh
+setup-cloudflare-secrets.ps1

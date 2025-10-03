@@ -125,6 +125,7 @@ export async function generateClientKeypair(): Promise<{
       kyberPublicKey: kyberResult.public_b64u,
       kyberPrivateKey: kyberResult.secret_b64u,
       dilithiumPublicKey: dilithiumResult.public_b64u,
+      // Store ONLY the secret_b64u string, just like Kyber
       dilithiumPrivateKey: dilithiumResult.secret_b64u
     };
   } catch (error) {
@@ -134,13 +135,25 @@ export async function generateClientKeypair(): Promise<{
 }
 
 // Sign data with Dilithium private key
-export async function signData(data: string, dilithiumPrivateKey: string): Promise<string> {
+export async function signData(data: string, dilithiumSecretB64u: string): Promise<string> {
   await ensureCryptoReady();
   
   const messageB64u = b64uEncode(new TextEncoder().encode(data));
-  const signResult = await (dilithiumSign as any)(dilithiumPrivateKey, messageB64u);
   
-  if (signResult.error) throw new Error(signResult.error);
+  console.log('Attempting to sign with Dilithium...');
+  console.log('Secret key length:', dilithiumSecretB64u.length);
+  console.log('Message length:', messageB64u.length);
+  
+  // IMPORTANT: dilithiumSign takes (message, secretKey) - message FIRST!
+  // This is different from the parameter order we used initially
+  const signResult = await (dilithiumSign as any)(messageB64u, dilithiumSecretB64u);
+  
+  console.log('Sign result:', signResult);
+  
+  if (signResult.error) {
+    console.error('Dilithium sign error:', signResult.error);
+    throw new Error(signResult.error);
+  }
   
   return signResult.signature_b64u;
 }

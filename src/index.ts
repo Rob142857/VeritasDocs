@@ -583,13 +583,26 @@ class VeritasApp {
           this.currentPage = 'search';
           this.renderSearch();
           break;
+        case '/docs':
+          this.currentPage = 'docs';
+          this.renderDocs();
+          break;
         default:
           this.currentPage = 'dashboard';
           this.renderDashboard();
       }
     } else {
-      this.currentPage = 'login';
-      this.renderLogin();
+      // Public routes for non-logged-in users
+      if (path === '/search') {
+        this.currentPage = 'search';
+        this.renderSearch();
+      } else if (path === '/docs') {
+        this.currentPage = 'docs';
+        this.renderDocs();
+      } else {
+        this.currentPage = 'login';
+        this.renderLogin();
+      }
     }
 
     this.updateNavigation();
@@ -622,6 +635,9 @@ class VeritasApp {
       case 'search':
         path = '/search';
         break;
+      case 'docs':
+        path = '/docs';
+        break;
       case 'logout':
         this.logout();
         return;
@@ -636,9 +652,9 @@ class VeritasApp {
     if (!nav) return;
 
     if (this.currentUser) {
-      nav.innerHTML = \`<a href="#" data-nav="dashboard" class="\${this.currentPage === 'dashboard' ? 'active' : ''}">Dashboard</a><a href="#" data-nav="create-asset" class="\${this.currentPage === 'create-asset' ? 'active' : ''}">Create Asset</a><a href="#" data-nav="search" class="\${this.currentPage === 'search' ? 'active' : ''}">Search</a><a href="#" data-nav="logout">Logout</a>\`;
+      nav.innerHTML = \`<a href="#" data-nav="dashboard" class="\${this.currentPage === 'dashboard' ? 'active' : ''}">Dashboard</a><a href="#" data-nav="create-asset" class="\${this.currentPage === 'create-asset' ? 'active' : ''}">Create Asset</a><a href="#" data-nav="search" class="\${this.currentPage === 'search' ? 'active' : ''}">Search</a><a href="#" data-nav="docs" class="\${this.currentPage === 'docs' ? 'active' : ''}">Docs</a><a href="#" data-nav="logout">Logout</a>\`;
     } else {
-      nav.innerHTML = \`<a href="#" data-nav="search" class="\${this.currentPage === 'search' ? 'active' : ''}">Search</a>\`;
+      nav.innerHTML = \`<a href="#" data-nav="search" class="\${this.currentPage === 'search' ? 'active' : ''}">Search</a><a href="#" data-nav="docs" class="\${this.currentPage === 'docs' ? 'active' : ''}">Docs</a>\`;
     }
   }
 
@@ -686,6 +702,167 @@ class VeritasApp {
 
     // Load initial results
     this.handleSearch();
+  }
+
+  renderDocs() {
+    const content = document.getElementById('content');
+    content.innerHTML = \`
+      <div class="docs-container">
+        <div class="docs-sidebar">
+          <h3 class="docs-sidebar-title">📚 Documentation</h3>
+          <nav class="docs-nav">
+            <a href="#" class="docs-nav-link active" data-doc="README">README</a>
+            <a href="#" class="docs-nav-link" data-doc="BLOCKCHAIN_ARCHITECTURE">Blockchain Architecture</a>
+            <a href="#" class="docs-nav-link" data-doc="ZERO_KNOWLEDGE_ARCHITECTURE">Zero-Knowledge Architecture</a>
+            <a href="#" class="docs-nav-link" data-doc="VDC_INTEGRATION_GUIDE">VDC Integration Guide</a>
+            <a href="#" class="docs-nav-link" data-doc="DEVELOPMENT_PLAN">Development Plan</a>
+            <a href="#" class="docs-nav-link" data-doc="TECHNICAL_STATUS">Technical Status</a>
+            <a href="#" class="docs-nav-link" data-doc="SECURITY_GUARDRAILS">Security Guardrails</a>
+          </nav>
+        </div>
+        <div class="docs-content">
+          <div id="doc-viewer" class="doc-viewer">
+            <div class="loading">Loading documentation...</div>
+          </div>
+        </div>
+      </div>
+    \`;
+
+    // Add styles for docs page
+    if (!document.getElementById('docs-styles')) {
+      const style = document.createElement('style');
+      style.id = 'docs-styles';
+      style.textContent = \`
+        .docs-container {
+          display: grid;
+          grid-template-columns: 280px 1fr;
+          gap: 2rem;
+          max-width: 1400px;
+          margin: 0 auto;
+        }
+        
+        .docs-sidebar {
+          background: var(--surface);
+          border-radius: 8px;
+          padding: 1.5rem;
+          height: fit-content;
+          position: sticky;
+          top: 2rem;
+        }
+        
+        .docs-sidebar-title {
+          margin: 0 0 1rem 0;
+          font-size: 1.25rem;
+          color: var(--text-primary);
+        }
+        
+        .docs-nav {
+          display: flex;
+          flex-direction: column;
+          gap: 0.5rem;
+        }
+        
+        .docs-nav-link {
+          padding: 0.75rem 1rem;
+          color: var(--text-secondary);
+          text-decoration: none;
+          border-radius: 6px;
+          transition: all 0.2s;
+          font-size: 0.95rem;
+        }
+        
+        .docs-nav-link:hover {
+          background: var(--background);
+          color: var(--primary-color);
+        }
+        
+        .docs-nav-link.active {
+          background: var(--primary-color);
+          color: white;
+          font-weight: 500;
+        }
+        
+        .docs-content {
+          background: white;
+          border-radius: 8px;
+          padding: 2.5rem;
+          box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+          min-height: 600px;
+        }
+        
+        .doc-viewer {
+          line-height: 1.7;
+        }
+        
+        .doc-viewer h1 { font-size: 2.5rem; margin: 0 0 1rem 0; color: var(--text-primary); }
+        .doc-viewer h2 { font-size: 1.75rem; margin: 2rem 0 1rem 0; color: var(--text-primary); border-bottom: 2px solid var(--border); padding-bottom: 0.5rem; }
+        .doc-viewer h3 { font-size: 1.35rem; margin: 1.5rem 0 0.75rem 0; color: var(--text-primary); }
+        .doc-viewer h4 { font-size: 1.15rem; margin: 1.25rem 0 0.5rem 0; color: var(--text-secondary); }
+        .doc-viewer p { margin: 0 0 1rem 0; color: var(--text-secondary); }
+        .doc-viewer ul, .doc-viewer ol { margin: 0 0 1rem 0; padding-left: 2rem; }
+        .doc-viewer li { margin: 0.5rem 0; color: var(--text-secondary); }
+        .doc-viewer code { background: var(--surface); padding: 0.2rem 0.4rem; border-radius: 3px; font-family: 'Courier New', monospace; font-size: 0.9em; }
+        .doc-viewer pre { background: #1e293b; color: #e2e8f0; padding: 1.5rem; border-radius: 6px; overflow-x: auto; margin: 1rem 0; }
+        .doc-viewer pre code { background: none; padding: 0; color: inherit; }
+        .doc-viewer blockquote { border-left: 4px solid var(--primary-color); padding-left: 1rem; margin: 1rem 0; color: var(--text-secondary); font-style: italic; }
+        .doc-viewer table { width: 100%; border-collapse: collapse; margin: 1rem 0; }
+        .doc-viewer th, .doc-viewer td { padding: 0.75rem; text-align: left; border-bottom: 1px solid var(--border); }
+        .doc-viewer th { background: var(--surface); font-weight: 600; color: var(--text-primary); }
+        .doc-viewer a { color: var(--primary-color); text-decoration: none; }
+        .doc-viewer a:hover { text-decoration: underline; }
+        .doc-viewer hr { border: none; border-top: 1px solid var(--border); margin: 2rem 0; }
+        .doc-viewer .loading { text-align: center; padding: 3rem; color: var(--text-muted); }
+        
+        @media (max-width: 768px) {
+          .docs-container {
+            grid-template-columns: 1fr;
+          }
+          
+          .docs-sidebar {
+            position: static;
+          }
+        }
+      \`;
+      document.head.appendChild(style);
+    }
+
+    // Load documentation
+    this.loadDoc('README');
+
+    // Handle doc navigation
+    document.querySelectorAll('.docs-nav-link').forEach(link => {
+      link.addEventListener('click', (e) => {
+        e.preventDefault();
+        const docName = link.getAttribute('data-doc');
+        
+        // Update active state
+        document.querySelectorAll('.docs-nav-link').forEach(l => l.classList.remove('active'));
+        link.classList.add('active');
+        
+        // Load doc
+        this.loadDoc(docName);
+      });
+    });
+  }
+
+  async loadDoc(docName) {
+    const viewer = document.getElementById('doc-viewer');
+    viewer.innerHTML = '<div class="loading">Loading documentation...</div>';
+
+    try {
+      const response = await fetch(\`/api/docs/\${docName}\`);
+      if (!response.ok) throw new Error('Failed to load documentation');
+      
+      const data = await response.json();
+      if (data.success) {
+        viewer.innerHTML = data.data.html;
+      } else {
+        viewer.innerHTML = '<div class="alert alert-error">Failed to load documentation</div>';
+      }
+    } catch (error) {
+      console.error('Error loading doc:', error);
+      viewer.innerHTML = '<div class="alert alert-error">Failed to load documentation. Please try again later.</div>';
+    }
   }
 
   renderActivationPage(token) {
@@ -1190,12 +1367,15 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 // API Routes
+import docsHandler from './handlers/docs';
+
 app.route('/api/auth', authHandler);
 app.route('/api/assets', assetHandler);
 app.route('/api/web3-assets', enhancedAssetHandler);
 app.route('/api/users', userHandler);
 app.route('/api/stripe', stripeHandler);
 app.route('/api/search', searchHandler);
+app.route('/api/docs', docsHandler);
 
 // HTML template for the SPA
 const appHTML = `
@@ -1239,6 +1419,7 @@ app.get('/activate', (c) => c.html(appHTML));
 app.get('/dashboard', (c) => c.html(appHTML));
 app.get('/create-asset', (c) => c.html(appHTML));
 app.get('/search', (c) => c.html(appHTML));
+app.get('/docs', (c) => c.html(appHTML));
 
 // Web3 Demo page - serve static demo file
 app.get('/demo', async (c) => {

@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { Environment, OneTimeLink, User, APIResponse } from '../types';
 import { MaataraClient, generateId, generateMnemonic } from '../utils/crypto';
-import { initializeVeritasChain, addUserToChain } from '../utils/blockchain';
+import { initializeVDC, addUserToVDC } from '../utils/blockchain';
 
 const authHandler = new Hono<{ Bindings: Environment }>();
 

@@ -1,215 +1,487 @@
-// Veritas Blockchain - Custom blockchain stored in IPFS
-import { Environment, VeritasChainBlock, ChainTransaction } from '../types';
+/**
+ * Veritas Documents Chain (VDC) - Post-Quantum Blockchain
+ * 
+ * A single master blockchain with dual-signature system:
+ * - User signatures: Prove user authorization
+ * - System signatures: Prove platform validation
+ * 
+ * All blocks signed by system master key stored in Cloudflare Secrets.
+ */
+
+import { Environment } from '../types';
 import { IPFSClient, createIPFSRecord } from './ipfs';
 import { MaataraClient } from './crypto';
 
-export interface VeritasBlock {
+/**
+ * VDC Transaction with Dual Signatures
+ */
+export interface VDCTransaction {
   id: string;
+  type: 'user_registration' | 'document_creation' | 'asset_transfer' | 'admin_action';
+  timestamp: number;
+  
+  // Transaction data (can be encrypted for sensitive info)
+  data: {
+    // User registration
+    userId?: string;
+    email?: string;
+    kyberPublicKey?: string;
+    dilithiumPublicKey?: string;
+    encryptedUserData?: any;
+    accountType?: 'admin' | 'paid' | 'invited';
+    
+    // Document creation
+    documentId?: string;
+    documentHash?: string;
+    ipfsHash?: string;
+    metadata?: any;
+    
+    // Asset transfer
+    assetId?: string;
+    fromUserId?: string;
+    toUserId?: string;
+    
+    // Generic data
+    [key: string]: any;
+  };
+  
+  // DUAL SIGNATURES
+  signatures: {
+    // User signature (proves user authorized this)
+    user: {
+      publicKey: string;    // User's Dilithium public key
+      signature: string;    // User's Dilithium signature
+    };
+    
+    // System signature (proves platform validated this)
+    system: {
+      publicKey: string;    // System master Dilithium public key
+      signature: string;    // System master Dilithium signature
+      keyVersion: number;   // For key rotation
+    };
+  };
+}
+
+/**
+ * VDC Block Structure
+ */
+export interface VDCBlock {
   blockNumber: number;
+  timestamp: number;
   previousHash: string;
   hash: string;
-  timestamp: number;
-  transactions: VeritasTransaction[];
-  signature: string;
+  
+  // Block contents
+  transactions: VDCTransaction[];
   merkleRoot: string;
-  ipfsHash?: string; // IPFS hash where this block is stored
+  
+  // Block signature (system master key signs entire block)
+  blockSignature: {
+    publicKey: string;
+    signature: string;
+    keyVersion: number;
+  };
+  
+  // IPFS storage
+  ipfsHash?: string;
 }
 
-export interface VeritasTransaction {
-  id: string;
-  type: 'user_registration' | 'asset_creation' | 'asset_transfer' | 'admin_action';
-  data: any; // Encrypted transaction data
-  signature: string; // Dilithium signature
-  timestamp: number;
-  publicKey: string; // Public key of the signer
+/**
+ * Genesis Block Data
+ */
+export interface VDCGenesisData {
+  chain: 'VeritasByMaataraBlockChain' | 'VDC';
+  version: string;
+  description: string;
+  generatedAt: string;
+  systemPublicKeys: {
+    dilithium: string;
+    kyber: string;
+    keyVersion: number;
+  };
 }
 
-export class VeritasBlockchain {
+/**
+ * Veritas Documents Chain (VDC) Blockchain
+ */
+export class VDCBlockchain {
+  private env: Environment;
   private ipfsClient: IPFSClient;
   private maataraClient: MaataraClient;
-  private genesisBlock: VeritasBlock;
-  private currentBlockNumber: number = 0;
-  private pendingTransactions: VeritasTransaction[] = [];
+  private genesisBlock: VDCBlock | null = null;
 
   constructor(env: Environment) {
+    this.env = env;
     this.ipfsClient = new IPFSClient(env);
     this.maataraClient = new MaataraClient(env);
-
-    // Initialize genesis block
-    this.genesisBlock = this.createGenesisBlock();
   }
 
   /**
-   * Create the genesis block for the Veritas chain
+   * Initialize the blockchain (load or create genesis)
    */
-  private createGenesisBlock(): VeritasBlock {
-    const genesisData = {
-      message: 'Veritas Documents - Genesis Block',
-      timestamp: Date.now(),
-      version: '1.0.0'
+  async initialize(): Promise<void> {
+    // Try to load existing genesis block
+    const genesisData = await this.env.VERITAS_KV.get('vdc:block:0');
+    
+    if (genesisData) {
+      this.genesisBlock = JSON.parse(genesisData);
+      console.log('✅ VDC: Loaded existing genesis block');
+    } else {
+      console.log('⚠️  VDC: No genesis block found - call createGenesisBlock()');
+    }
+  }
+
+  /**
+   * Create the genesis block for the VDC blockchain
+   * This should only be called ONCE when initializing the chain
+   */
+  async createGenesisBlock(): Promise<VDCBlock> {
+    // Check if genesis already exists
+    const existing = await this.env.VERITAS_KV.get('vdc:block:0');
+    if (existing) {
+      throw new Error('Genesis block already exists! Cannot recreate.');
+    }
+
+    // Get system public keys from environment
+    const systemDilithiumPublicKey = this.env.SYSTEM_DILITHIUM_PUBLIC_KEY;
+    const systemKyberPublicKey = this.env.SYSTEM_KYBER_PUBLIC_KEY;
+    const systemKeyVersion = parseInt(this.env.SYSTEM_KEY_VERSION || '1');
+
+    if (!systemDilithiumPublicKey) {
+      throw new Error('SYSTEM_DILITHIUM_PUBLIC_KEY not found in environment');
+    }
+
+    const genesisData: VDCGenesisData = {
+      chain: 'VeritasByMaataraBlockChain',
+      version: '1.0.0',
+      description: 'Veritas Documents Chain - Post-Quantum Legal Document Blockchain',
+      generatedAt: new Date().toISOString(),
+      systemPublicKeys: {
+        dilithium: systemDilithiumPublicKey,
+        kyber: systemKyberPublicKey || '',
+        keyVersion: systemKeyVersion
+      }
     };
 
-    const block: VeritasBlock = {
-      id: 'genesis',
+    const timestamp = Date.now();
+
+    // Create genesis block
+    const genesisBlock: VDCBlock = {
       blockNumber: 0,
+      timestamp,
       previousHash: '0',
-      hash: this.calculateBlockHash(0, '0', [], Date.now()),
-      timestamp: Date.now(),
+      hash: '',
       transactions: [],
-      signature: '',
-      merkleRoot: this.calculateMerkleRoot([])
+      merkleRoot: this.calculateMerkleRoot([]),
+      blockSignature: {
+        publicKey: systemDilithiumPublicKey,
+        signature: '',
+        keyVersion: systemKeyVersion
+      }
     };
 
-    return block;
-  }
+    // Calculate genesis hash
+    genesisBlock.hash = await this.calculateBlockHash(genesisBlock);
 
-  /**
-   * Add a transaction to the pending pool
-   */
-  async addTransaction(
-    type: VeritasTransaction['type'],
-    data: any,
-    privateKey: string,
-    publicKey: string
-  ): Promise<string> {
-    // Create transaction data
-    const transactionData = {
-      type,
-      data,
-      timestamp: Date.now()
+    // Sign genesis block with system master key
+    const blockDataToSign = {
+      blockNumber: 0,
+      timestamp,
+      previousHash: '0',
+      hash: genesisBlock.hash,
+      merkleRoot: genesisBlock.merkleRoot,
+      genesisData
     };
 
-    // Sign the transaction with Dilithium
-    const signature = await this.maataraClient.signData(
-      JSON.stringify(transactionData),
-      privateKey
+    genesisBlock.blockSignature.signature = await this.maataraClient.signData(
+      JSON.stringify(blockDataToSign),
+      this.env.SYSTEM_DILITHIUM_PRIVATE_KEY
     );
 
-    const transaction: VeritasTransaction = {
-      id: `tx_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+    // Upload to IPFS
+    const blockJson = JSON.stringify(genesisBlock, null, 2);
+    const ipfsRecord = await createIPFSRecord(this.ipfsClient, blockJson, 'application/json');
+    genesisBlock.ipfsHash = ipfsRecord.hash;
+
+    // Store in KV
+    await this.env.VERITAS_KV.put('vdc:block:0', JSON.stringify(genesisBlock));
+    await this.env.VERITAS_KV.put('vdc:latest', JSON.stringify({
+      blockNumber: 0,
+      hash: genesisBlock.hash,
+      ipfsHash: genesisBlock.ipfsHash,
+      timestamp
+    }));
+    await this.env.VERITAS_KV.put('vdc:genesis', JSON.stringify(genesisData));
+
+    this.genesisBlock = genesisBlock;
+
+    console.log('🎉 VDC: Genesis block created!');
+    console.log(`   Block Hash: ${genesisBlock.hash}`);
+    console.log(`   IPFS Hash: ${genesisBlock.ipfsHash}`);
+
+    return genesisBlock;
+  }
+
+  /**
+   * Add a transaction to the pending pool (with dual signatures)
+   */
+  async addTransaction(
+    type: VDCTransaction['type'],
+    data: VDCTransaction['data'],
+    userDilithiumPrivateKey: string,
+    userDilithiumPublicKey: string
+  ): Promise<string> {
+    // Create transaction ID
+    const txId = `vdc_tx_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
+    // Prepare transaction data for signing
+    const txData = {
+      id: txId,
       type,
-      data: transactionData,
-      signature,
       timestamp: Date.now(),
-      publicKey
+      data
     };
 
-    // Add to pending transactions
-    this.pendingTransactions.push(transaction);
+    // USER SIGNATURE: User signs the transaction
+    const userSignature = await this.maataraClient.signData(
+      JSON.stringify(txData),
+      userDilithiumPrivateKey
+    );
 
-    return transaction.id;
+    // SYSTEM SIGNATURE: System validates and signs the transaction
+    const systemKeyVersion = parseInt(this.env.SYSTEM_KEY_VERSION || '1');
+    const systemPublicKey = this.env.SYSTEM_DILITHIUM_PUBLIC_KEY;
+    const systemPrivateKey = this.env.SYSTEM_DILITHIUM_PRIVATE_KEY;
+
+    if (!systemPrivateKey || !systemPublicKey) {
+      throw new Error('System master keys not configured in environment');
+    }
+
+    const systemSignature = await this.maataraClient.signData(
+      JSON.stringify(txData),
+      systemPrivateKey
+    );
+
+    // Create final transaction with dual signatures
+    const transaction: VDCTransaction = {
+      ...txData,
+      signatures: {
+        user: {
+          publicKey: userDilithiumPublicKey,
+          signature: userSignature
+        },
+        system: {
+          publicKey: systemPublicKey,
+          signature: systemSignature,
+          keyVersion: systemKeyVersion
+        }
+      }
+    };
+
+    // Store in pending pool
+    await this.env.VERITAS_KV.put(
+      `vdc:pending:${txId}`,
+      JSON.stringify(transaction)
+    );
+
+    // Increment pending count
+    const countStr = await this.env.VERITAS_KV.get('vdc:pending:count') || '0';
+    const count = parseInt(countStr) + 1;
+    await this.env.VERITAS_KV.put('vdc:pending:count', count.toString());
+
+    console.log(`✅ VDC: Transaction ${txId} added to pending pool`);
+    console.log(`   Type: ${type}`);
+    console.log(`   Pending count: ${count}`);
+
+    return txId;
   }
 
   /**
    * Mine a new block with pending transactions
    */
-  async mineBlock(): Promise<VeritasBlock> {
-    if (this.pendingTransactions.length === 0) {
+  async mineBlock(): Promise<VDCBlock> {
+    // Get pending transactions
+    const pendingList = await this.env.VERITAS_KV.list({ prefix: 'vdc:pending:' });
+    const transactions: VDCTransaction[] = [];
+
+    for (const key of pendingList.keys) {
+      if (key.name === 'vdc:pending:count') continue;
+      
+      const txData = await this.env.VERITAS_KV.get(key.name);
+      if (txData) {
+        transactions.push(JSON.parse(txData));
+      }
+    }
+
+    if (transactions.length === 0) {
       throw new Error('No pending transactions to mine');
     }
 
-    const previousBlock = await this.getLatestBlock();
-    const blockNumber = previousBlock.blockNumber + 1;
+    // Get previous block
+    const latestData = await this.env.VERITAS_KV.get('vdc:latest');
+    if (!latestData) {
+      throw new Error('No latest block found - create genesis first');
+    }
+
+    const latest = JSON.parse(latestData);
+    const blockNumber = latest.blockNumber + 1;
     const timestamp = Date.now();
 
     // Create block
-    const block: VeritasBlock = {
-      id: `block_${blockNumber}`,
+    const block: VDCBlock = {
       blockNumber,
-      previousHash: previousBlock.hash,
-      hash: '',
       timestamp,
-      transactions: [...this.pendingTransactions],
-      signature: '',
-      merkleRoot: this.calculateMerkleRoot(this.pendingTransactions)
+      previousHash: latest.hash,
+      hash: '',
+      transactions,
+      merkleRoot: this.calculateMerkleRoot(transactions),
+      blockSignature: {
+        publicKey: this.env.SYSTEM_DILITHIUM_PUBLIC_KEY,
+        signature: '',
+        keyVersion: parseInt(this.env.SYSTEM_KEY_VERSION || '1')
+      }
     };
 
     // Calculate block hash
-    block.hash = this.calculateBlockHash(
+    block.hash = await this.calculateBlockHash(block);
+
+    // Sign block with system master key
+    const blockDataToSign = {
       blockNumber,
-      previousBlock.hash,
-      this.pendingTransactions,
-      timestamp
+      timestamp,
+      previousHash: latest.hash,
+      hash: block.hash,
+      merkleRoot: block.merkleRoot,
+      transactionCount: transactions.length
+    };
+
+    block.blockSignature.signature = await this.maataraClient.signData(
+      JSON.stringify(blockDataToSign),
+      this.env.SYSTEM_DILITHIUM_PRIVATE_KEY
     );
 
-    // Sign the block (using system key for now - in production, use validator keys)
-    // For now, we'll use a mock signature since we don't have a system private key
-    block.signature = `mock_signature_${block.hash}`;
-
-    // Store block in IPFS
-    const blockData = JSON.stringify(block, null, 2);
-    const ipfsRecord = await createIPFSRecord(
-      this.ipfsClient,
-      blockData,
-      'application/json'
-    );
-
+    // Upload to IPFS
+    const blockJson = JSON.stringify(block, null, 2);
+    const ipfsRecord = await createIPFSRecord(this.ipfsClient, blockJson, 'application/json');
     block.ipfsHash = ipfsRecord.hash;
 
-    // Clear pending transactions
-    this.pendingTransactions = [];
+    // Store block in KV
+    await this.env.VERITAS_KV.put(`vdc:block:${blockNumber}`, JSON.stringify(block));
+    
+    // Update latest pointer
+    await this.env.VERITAS_KV.put('vdc:latest', JSON.stringify({
+      blockNumber,
+      hash: block.hash,
+      ipfsHash: block.ipfsHash,
+      timestamp
+    }));
 
-    // Update current block number
-    this.currentBlockNumber = blockNumber;
+    // Index transactions
+    for (const tx of transactions) {
+      await this.env.VERITAS_KV.put(`vdc:tx:${tx.id}`, JSON.stringify({
+        blockNumber,
+        txId: tx.id,
+        type: tx.type,
+        timestamp: tx.timestamp
+      }));
+    }
+
+    // Clear pending transactions
+    for (const key of pendingList.keys) {
+      await this.env.VERITAS_KV.delete(key.name);
+    }
+    await this.env.VERITAS_KV.put('vdc:pending:count', '0');
+
+    console.log(`🎉 VDC: Block ${blockNumber} mined!`);
+    console.log(`   Hash: ${block.hash}`);
+    console.log(`   IPFS: ${block.ipfsHash}`);
+    console.log(`   Transactions: ${transactions.length}`);
 
     return block;
   }
 
   /**
-   * Get the latest block from the chain
+   * Get the latest block
    */
-  async getLatestBlock(): Promise<VeritasBlock> {
-    // For now, return genesis block or last known block
-    // In a full implementation, this would track the chain state
-    return this.genesisBlock;
+  async getLatestBlock(): Promise<VDCBlock> {
+    const latestData = await this.env.VERITAS_KV.get('vdc:latest');
+    if (!latestData) {
+      throw new Error('No latest block found');
+    }
+
+    const latest = JSON.parse(latestData);
+    const blockData = await this.env.VERITAS_KV.get(`vdc:block:${latest.blockNumber}`);
+    
+    if (!blockData) {
+      throw new Error(`Block ${latest.blockNumber} not found`);
+    }
+
+    return JSON.parse(blockData);
   }
 
   /**
    * Get a block by number
    */
-  async getBlock(blockNumber: number): Promise<VeritasBlock | null> {
-    if (blockNumber === 0) {
-      return this.genesisBlock;
-    }
-
-    // In a full implementation, this would retrieve from IPFS or local storage
-    // For now, return null for non-genesis blocks
-    return null;
+  async getBlock(blockNumber: number): Promise<VDCBlock | null> {
+    const blockData = await this.env.VERITAS_KV.get(`vdc:block:${blockNumber}`);
+    return blockData ? JSON.parse(blockData) : null;
   }
 
   /**
    * Get transaction by ID
    */
-  async getTransaction(txId: string): Promise<VeritasTransaction | null> {
-    // Search in pending transactions first
-    const pendingTx = this.pendingTransactions.find(tx => tx.id === txId);
-    if (pendingTx) {
-      return pendingTx;
-    }
+  async getTransaction(txId: string): Promise<VDCTransaction | null> {
+    const txIndexData = await this.env.VERITAS_KV.get(`vdc:tx:${txId}`);
+    if (!txIndexData) return null;
 
-    // In a full implementation, this would search through all blocks
-    // For now, return null
-    return null;
+    const txIndex = JSON.parse(txIndexData);
+    const block = await this.getBlock(txIndex.blockNumber);
+    
+    if (!block) return null;
+
+    return block.transactions.find(tx => tx.id === txId) || null;
   }
 
   /**
-   * Verify a transaction's signature
+   * Verify a transaction's dual signatures
    */
-  async verifyTransaction(transaction: VeritasTransaction): Promise<boolean> {
+  async verifyTransaction(transaction: VDCTransaction): Promise<boolean> {
     try {
-      const dataToVerify = JSON.stringify({
+      const txData = {
+        id: transaction.id,
         type: transaction.type,
-        data: transaction.data,
-        timestamp: transaction.timestamp
-      });
+        timestamp: transaction.timestamp,
+        data: transaction.data
+      };
+      const dataToVerify = JSON.stringify(txData);
 
-      return await this.maataraClient.verifySignature(
+      // Verify user signature
+      const userSigValid = await this.maataraClient.verifySignature(
         dataToVerify,
-        transaction.signature,
-        transaction.publicKey
+        transaction.signatures.user.signature,
+        transaction.signatures.user.publicKey
       );
+
+      if (!userSigValid) {
+        console.error('❌ VDC: User signature invalid');
+        return false;
+      }
+
+      // Verify system signature
+      const systemSigValid = await this.maataraClient.verifySignature(
+        dataToVerify,
+        transaction.signatures.system.signature,
+        transaction.signatures.system.publicKey
+      );
+
+      if (!systemSigValid) {
+        console.error('❌ VDC: System signature invalid');
+        return false;
+      }
+
+      return true;
     } catch (error) {
-      console.error('Transaction verification failed:', error);
+      console.error('❌ VDC: Transaction verification failed:', error);
       return false;
     }
   }
@@ -217,197 +489,219 @@ export class VeritasBlockchain {
   /**
    * Verify a block's integrity
    */
-  async verifyBlock(block: VeritasBlock): Promise<boolean> {
+  async verifyBlock(block: VDCBlock): Promise<boolean> {
     try {
       // Verify block hash
-      const expectedHash = this.calculateBlockHash(
-        block.blockNumber,
-        block.previousHash,
-        block.transactions,
-        block.timestamp
-      );
-
+      const expectedHash = await this.calculateBlockHash(block);
       if (expectedHash !== block.hash) {
+        console.error('❌ VDC: Block hash mismatch');
         return false;
       }
 
       // Verify merkle root
       const expectedMerkleRoot = this.calculateMerkleRoot(block.transactions);
       if (expectedMerkleRoot !== block.merkleRoot) {
+        console.error('❌ VDC: Merkle root mismatch');
         return false;
       }
 
-      // Verify all transactions in the block
+      // Verify block signature
+      const blockDataToVerify = {
+        blockNumber: block.blockNumber,
+        timestamp: block.timestamp,
+        previousHash: block.previousHash,
+        hash: block.hash,
+        merkleRoot: block.merkleRoot,
+        transactionCount: block.transactions.length
+      };
+
+      const blockSigValid = await this.maataraClient.verifySignature(
+        JSON.stringify(blockDataToVerify),
+        block.blockSignature.signature,
+        block.blockSignature.publicKey
+      );
+
+      if (!blockSigValid) {
+        console.error('❌ VDC: Block signature invalid');
+        return false;
+      }
+
+      // Verify all transactions
       for (const tx of block.transactions) {
         if (!(await this.verifyTransaction(tx))) {
+          console.error(`❌ VDC: Transaction ${tx.id} invalid`);
           return false;
         }
       }
 
       return true;
     } catch (error) {
-      console.error('Block verification failed:', error);
+      console.error('❌ VDC: Block verification failed:', error);
       return false;
     }
+  }
+
+  /**
+   * Calculate block hash
+   */
+  private async calculateBlockHash(block: VDCBlock): Promise<string> {
+    const data = `${block.blockNumber}${block.previousHash}${block.merkleRoot}${block.timestamp}`;
+    
+    // Use Web Crypto API for SHA-256
+    const encoder = new TextEncoder();
+    const dataBuffer = encoder.encode(data);
+    const hashBuffer = await crypto.subtle.digest('SHA-256', dataBuffer);
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+    
+    return hashHex;
+  }
+
+  /**
+   * Calculate Merkle root for transactions
+   */
+  private calculateMerkleRoot(transactions: VDCTransaction[]): string {
+    if (transactions.length === 0) {
+      return '0000000000000000000000000000000000000000000000000000000000000000';
+    }
+
+    // Simple merkle root: hash all transaction IDs together
+    const txHashes = transactions.map(tx => this.hashString(tx.id));
+    return this.hashString(txHashes.join(''));
+  }
+
+  /**
+   * Hash a string using simple hash function
+   */
+  private hashString(str: string): string {
+    let hash = 0;
+    for (let i = 0; i < str.length; i++) {
+      const char = str.charCodeAt(i);
+      hash = ((hash << 5) - hash) + char;
+      hash = hash & hash; // Convert to 32-bit integer
+    }
+    return Math.abs(hash).toString(16).padStart(8, '0');
   }
 
   /**
    * Get blockchain statistics
    */
   async getStats(): Promise<any> {
+    const latestData = await this.env.VERITAS_KV.get('vdc:latest');
+    const pendingCount = await this.env.VERITAS_KV.get('vdc:pending:count') || '0';
+    
+    if (!latestData) {
+      return {
+        initialized: false,
+        message: 'Genesis block not created yet'
+      };
+    }
+
+    const latest = JSON.parse(latestData);
+
     return {
-      totalBlocks: this.currentBlockNumber + 1,
-      pendingTransactions: this.pendingTransactions.length,
-      genesisBlock: this.genesisBlock.hash,
-      latestBlock: (await this.getLatestBlock()).hash
+      initialized: true,
+      chain: 'VeritasByMaataraBlockChain (VDC)',
+      totalBlocks: latest.blockNumber + 1,
+      latestBlock: {
+        number: latest.blockNumber,
+        hash: latest.hash,
+        ipfsHash: latest.ipfsHash,
+        timestamp: latest.timestamp
+      },
+      pendingTransactions: parseInt(pendingCount),
+      genesisHash: this.genesisBlock?.hash || 'unknown'
     };
   }
-
-  /**
-   * Calculate block hash
-   */
-  private calculateBlockHash(
-    blockNumber: number,
-    previousHash: string,
-    transactions: VeritasTransaction[],
-    timestamp: number
-  ): string {
-    const data = `${blockNumber}${previousHash}${JSON.stringify(transactions)}${timestamp}`;
-    // Simple hash for demo - in production use proper crypto
-    let hash = 0;
-    for (let i = 0; i < data.length; i++) {
-      const char = data.charCodeAt(i);
-      hash = ((hash << 5) - hash) + char;
-      hash = hash & hash; // Convert to 32-bit integer
-    }
-    return Math.abs(hash).toString(16);
-  }
-
-  /**
-   * Calculate Merkle root for transactions
-   */
-  private calculateMerkleRoot(transactions: VeritasTransaction[]): string {
-    if (transactions.length === 0) {
-      return '0';
-    }
-
-    // Simple merkle root calculation for demo
-    const hashes = transactions.map(tx => this.hashTransaction(tx));
-    return this.hashArray(hashes);
-  }
-
-  /**
-   * Hash a single transaction
-   */
-  private hashTransaction(tx: VeritasTransaction): string {
-    const data = `${tx.id}${tx.type}${JSON.stringify(tx.data)}${tx.timestamp}`;
-    let hash = 0;
-    for (let i = 0; i < data.length; i++) {
-      const char = data.charCodeAt(i);
-      hash = ((hash << 5) - hash) + char;
-      hash = hash & hash;
-    }
-    return Math.abs(hash).toString(16);
-  }
-
-  /**
-   * Hash an array of strings
-   */
-  private hashArray(arr: string[]): string {
-    const combined = arr.join('');
-    let hash = 0;
-    for (let i = 0; i < combined.length; i++) {
-      const char = combined.charCodeAt(i);
-      hash = ((hash << 5) - hash) + char;
-      hash = hash & hash;
-    }
-    return Math.abs(hash).toString(16);
-  }
 }
 
 /**
- * Helper function to create and manage the Veritas blockchain
+ * Initialize the VDC blockchain
  */
-export async function initializeVeritasChain(env: Environment): Promise<VeritasBlockchain> {
-  const blockchain = new VeritasBlockchain(env);
-
-  // Initialize chain state
-  // In a full implementation, this would load the latest state from IPFS/storage
-
-  return blockchain;
+export async function initializeVDC(env: Environment): Promise<VDCBlockchain> {
+  const vdc = new VDCBlockchain(env);
+  await vdc.initialize();
+  return vdc;
 }
 
 /**
- * Helper function to add user registration to blockchain
+ * Helper function to add user registration to VDC
  */
-export async function addUserToChain(
-  blockchain: VeritasBlockchain,
+export async function addUserToVDC(
+  vdc: VDCBlockchain,
   userId: string,
-  publicKey: string,
-  privateKey: string
+  email: string,
+  kyberPublicKey: string,
+  dilithiumPublicKey: string,
+  encryptedUserData: any,
+  accountType: 'admin' | 'paid' | 'invited',
+  userDilithiumPrivateKey: string
 ): Promise<string> {
-  const transactionData = {
+  const txData = {
     userId,
-    publicKey,
-    action: 'user_registration'
+    email,
+    kyberPublicKey,
+    dilithiumPublicKey,
+    encryptedUserData,
+    accountType
   };
 
-  return await blockchain.addTransaction(
+  return await vdc.addTransaction(
     'user_registration',
-    transactionData,
-    privateKey,
-    publicKey
+    txData,
+    userDilithiumPrivateKey,
+    dilithiumPublicKey
   );
 }
 
 /**
- * Helper function to add asset creation to blockchain
+ * Helper function to add document creation to VDC
  */
-export async function addAssetToChain(
-  blockchain: VeritasBlockchain,
-  assetId: string,
-  ownerId: string,
+export async function addDocumentToVDC(
+  vdc: VDCBlockchain,
+  documentId: string,
+  documentHash: string,
   ipfsHash: string,
-  privateKey: string,
-  publicKey: string
+  metadata: any,
+  userDilithiumPrivateKey: string,
+  userDilithiumPublicKey: string
 ): Promise<string> {
-  const transactionData = {
-    assetId,
-    ownerId,
+  const txData = {
+    documentId,
+    documentHash,
     ipfsHash,
-    action: 'asset_creation'
+    metadata
   };
 
-  return await blockchain.addTransaction(
-    'asset_creation',
-    transactionData,
-    privateKey,
-    publicKey
+  return await vdc.addTransaction(
+    'document_creation',
+    txData,
+    userDilithiumPrivateKey,
+    userDilithiumPublicKey
   );
 }
 
 /**
- * Helper function to add asset transfer to blockchain
+ * Helper function to add asset transfer to VDC
  */
-export async function addAssetTransferToChain(
-  blockchain: VeritasBlockchain,
+export async function addAssetTransferToVDC(
+  vdc: VDCBlockchain,
   assetId: string,
   fromUserId: string,
   toUserId: string,
-  privateKey: string,
-  publicKey: string
+  userDilithiumPrivateKey: string,
+  userDilithiumPublicKey: string
 ): Promise<string> {
-  const transactionData = {
+  const txData = {
     assetId,
     fromUserId,
-    toUserId,
-    action: 'asset_transfer'
+    toUserId
   };
 
-  return await blockchain.addTransaction(
+  return await vdc.addTransaction(
     'asset_transfer',
-    transactionData,
-    privateKey,
-    publicKey
+    txData,
+    userDilithiumPrivateKey,
+    userDilithiumPublicKey
   );
 }

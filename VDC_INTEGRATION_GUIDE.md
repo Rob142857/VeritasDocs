@@ -1,86 +1,136 @@
-# VDC Integration - Auth Handler Updates
+# VDC Blockchain Integration Guide
 
-## Summary of Changes
+**Version**: 1.0.1  
+**Last Updated**: January 3, 2025  
+**Status**: Production
 
-The auth.ts handler needs to be updated to:
-1. Import VDC blockchain functions instead of old VeritasChain
-2. Add system signature to user registration transactions
-3. Store transactions in VDC pending pool
-4. Optionally mine blocks when threshold is reached
+---
 
-## Code Changes Required
+## 📋 Table of Contents
 
-### 1. Update Imports
+1. [Overview](#overview)
+2. [Setup & Initialization](#setup--initialization)
+3. [User Registration Flow](#user-registration-flow)
+4. [Document Creation Flow](#document-creation-flow)
+5. [Querying the Blockchain](#querying-the-blockchain)
+6. [Verification & Security](#verification--security)
+7. [API Reference](#api-reference)
 
-**BEFORE:**
-```typescript
-import { initializeVeritasChain, addUserToChain } from '../utils/blockchain';
+---
+
+## 🎯 Overview
+
+The **Veritas Documents Chain (VDC)** is a post-quantum blockchain for legal document storage with:
+
+- **Dual Signatures**: Every transaction signed by user + system
+- **Post-Quantum Crypto**: Dilithium-2 signatures (NIST FIPS 204)
+- **IPFS Storage**: Blocks stored permanently in IPFS
+- **Zero-Knowledge**: User data encrypted client-side
+- **Immutable Audit Trail**: Complete verification history
+
+---
+
+## 🚀 Setup & Initialization
+
+### 1. Generate System Master Keys
+
+```bash
+# Generate VDC system master keys (ONE TIME ONLY)
+node generate-system-keys.js
 ```
 
-**AFTER:**
-```typescript
-import { initializeVDC, addUserToVDC, VDCBlockchain } from '../utils/blockchain';
+Creates:
+- `system-master-keys.json` - Complete keys (NEVER deploy to production)
+- `system-public-keys.json` - Public keys only
+
+### 2. Configure Cloudflare Secrets
+
+```bash
+# Upload secrets to Cloudflare
+.\setup-production-secrets.ps1
+
+# Or manually
+echo "your-dilithium-public-key" | wrangler secret put SYSTEM_DILITHIUM_PUBLIC_KEY --env production
+echo "first-half-of-private-key" | wrangler secret put SYSTEM_DILITHIUM_PRIVATE_PART1 --env production
+echo "second-half-of-private-key" | wrangler secret put SYSTEM_DILITHIUM_PRIVATE_PART2 --env production
+echo "your-kyber-public-key" | wrangler secret put SYSTEM_KYBER_PUBLIC_KEY --env production
+echo "your-kyber-private-key" | wrangler secret put SYSTEM_KYBER_PRIVATE --env production
+echo "vdc-master-v1-timestamp" | wrangler secret put SYSTEM_KEY_ID --env production
 ```
 
-### 2. Update Activation Endpoint
+### 3. Initialize Genesis Block
 
-**Location:** `authHandler.post('/activate', ...)`
+```bash
+# Create genesis block (block 0)
+node initialize-genesis-block.js production
+```
 
-**Changes:**
-- Initialize VDC blockchain
-- Create transaction with dual signatures (user + system)
-- Add to VDC pending pool
-- Optionally mine block if threshold reached
+Creates:
+- Block 0 with system public keys
+- Genesis transaction signed by system
+- IPFS hash for genesis block
+- Initial blockchain state in KV
 
-**NEW CODE:**
+### 4. Verify Setup
+
+```bash
+# Check blockchain stats
+curl https://your-worker.workers.dev/api/vdc/stats
+
+# Expected response:
+{
+  "success": true,
+  "data": {
+    "initialized": true,
+    "chain": "VeritasByMaataraBlockChain (VDC)",
+    "totalBlocks": 1,
+    "latestBlock": {
+      "number": 0,
+      "hash": "...",
+      "ipfsHash": "Qm...",
+      "timestamp": 1735888726509
+    },
+    "pendingTransactions": 0,
+    "genesisHash": "..."
+  }
+}
+```
+
+---
+
+## 👤 User Registration Flow
+
+### Backend Implementation (Current)
+
 ```typescript
+// src/handlers/auth.ts
+import { initializeVDC, addUserToVDC } from '../utils/blockchain';
+
 authHandler.post('/activate', async (c) => {
+  const env = c.env;
+  const { 
+    token,
+    kyberPublicKey,
+    dilithiumPublicKey,
+    encryptedUserData,  // Already encrypted client-side
+    signature           // User's Dilithium signature from frontend
+  } = await c.req.json();
+
+  // ... token validation ...
+
+  const userId = generateId();
+  const accountType = oneTimeLink.inviteType === 'admin' ? 'admin' : 'invited';
+
+  // Initialize VDC blockchain
+  const vdc = await initializeVDC(env);
+
+  // Add user to VDC with dual signatures
+  // This will:
+  // 1. Accept user's pre-computed signature
+  // 2. Add system signature
+  // 3. Create dual-signed transaction
+  // 4. Add to pending pool
   try {
-    const env = c.env;
-    const { 
-      token,
-      kyberPublicKey,
-      dilithiumPublicKey,
-      dilithiumPrivateKey, // USER'S PRIVATE KEY (only for signing this tx, never stored!)
-      encryptedUserData,
-      userSignature // User already signed the tx client-side
-    } = await c.req.json();
-
-    // ... existing validation code ...
-
-    // Determine account type from invite (NOT user-definable!)
-    const accountType = oneTimeLink.inviteType === 'admin' ? 'admin' : 
-                       oneTimeLink.inviteType === 'user' ? 'invited' : 'paid';
-
-    // Initialize VDC blockchain
-    const vdc = await initializeVDC(env);
-
-    // Verify user signature
-    const maataraClient = new MaataraClient(env);
-    const txData = {
-      userId,
-      email: oneTimeLink.email,
-      kyberPublicKey,
-      dilithiumPublicKey,
-      encryptedUserData,
-      accountType,
-      timestamp: Date.now()
-    };
-    
-    const isValid = await maataraClient.verifySignature(
-      JSON.stringify(txData),
-      userSignature,
-      dilithiumPublicKey
-    );
-    
-    if (!isValid) {
-      return c.json<APIResponse>({ 
-        success: false, 
-        error: 'Invalid user signature - transaction rejected' 
-      }, 401);
-    }
-
-    // Add transaction to VDC (this will add SYSTEM SIGNATURE automatically)
     const txId = await addUserToVDC(
       vdc,
       userId,
@@ -89,330 +139,495 @@ authHandler.post('/activate', async (c) => {
       dilithiumPublicKey,
       encryptedUserData,
       accountType,
-      dilithiumPrivateKey // Used ONLY to sign, never stored
+      signature  // User's signature from frontend
     );
 
-    // Check if we should mine a block
-    const pendingCountStr = await env.VERITAS_KV.get('vdc:pending:count') || '0';
-    const pendingCount = parseInt(pendingCountStr);
-    
-    console.log(`📊 VDC: ${pendingCount} pending transactions`);
-    
-    // Mine block if we have 10 or more transactions
-    if (pendingCount >= 10) {
-      console.log('⛏️  VDC: Mining new block...');
-      try {
-        const block = await vdc.mineBlock();
-        console.log(`✅ VDC: Block ${block.blockNumber} mined with ${block.transactions.length} transactions`);
-      } catch (error) {
-        console.error('❌ VDC: Block mining failed:', error);
-        // Don't fail user registration if block mining fails
-      }
-    }
+    console.log(`✅ User ${userId} added to VDC (tx: ${txId})`);
 
-    // ... rest of existing code (mark link as used, create user record, etc.) ...
+    // Save user record
+    const user = {
+      id: userId,
+      email: oneTimeLink.email,
+      publicKey: kyberPublicKey,
+      encryptedPrivateData: JSON.stringify({
+        recoveryPhrase: generateMnemonic(),
+        blockchainTxId: txId,
+        dilithiumPublicKey
+      }),
+      createdAt: Date.now(),
+      hasActivated: true,
+      accountType
+    };
 
-    return c.json<APIResponse>({
-      success: true,
-      data: {
-        userId,
-        email: oneTimeLink.email,
-        publicKey: kyberPublicKey,
-        recoveryPhrase,
-        accountType,
-        vdcTransactionId: txId, // VDC transaction ID
-        message: 'Account activated successfully. Save your recovery phrase!'
-      }
-    });
+    await env.VERITAS_KV.put(`user:${userId}`, JSON.stringify(user));
+    await env.VERITAS_KV.put(`user:email:${email}`, userId);
 
-  } catch (error) {
-    console.error('Error activating account:', error);
-    return c.json<APIResponse>({ success: false, error: 'Internal server error' }, 500);
+    return c.json({ success: true, data: { userId, txId } });
+  } catch (error: any) {
+    return c.json({ 
+      success: false, 
+      error: `Blockchain transaction rejected: ${error?.message}` 
+    }, 401);
   }
 });
 ```
 
-### 3. Update Login Endpoint
+### Frontend Implementation
 
-**No major changes needed** - login still verifies by decrypting user's blockchain transaction.
+```javascript
+// public/app.js
+async function handleActivation(personalDetails) {
+  // 1. Initialize WASM
+  await window.VeritasCrypto.ensureCryptoReady();
 
-The transaction is now in VDC format with dual signatures, but login only needs to verify the user can decrypt their own data.
+  // 2. Generate keypairs (CLIENT-SIDE ONLY)
+  const keypairs = await window.VeritasCrypto.generateClientKeypair();
 
-### 4. Add VDC Admin Endpoints
+  // 3. Encrypt user data
+  const userData = {
+    email: userEmail,
+    personalDetails,
+    preferences: {},
+    createdAt: Date.now()
+  };
+  
+  const encryptedUserData = await window.VeritasCrypto.encryptDocumentData(
+    JSON.stringify(userData),
+    keypairs.kyberPublicKey
+  );
 
-Add new endpoints for VDC management:
+  // 4. Sign blockchain transaction
+  const dataToSign = JSON.stringify({
+    kyberPublicKey: keypairs.kyberPublicKey,
+    dilithiumPublicKey: keypairs.dilithiumPublicKey,
+    encryptedUserData,
+    timestamp: Date.now()
+  });
+
+  const signature = await window.VeritasCrypto.signData(
+    dataToSign,
+    keypairs.dilithiumPrivateKey
+  );
+
+  // 5. Send to server (NO PRIVATE KEYS!)
+  const response = await fetch('/api/auth/activate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      token: activationToken,
+      kyberPublicKey: keypairs.kyberPublicKey,
+      dilithiumPublicKey: keypairs.dilithiumPublicKey,
+      encryptedUserData,
+      signature  // Pre-computed by client
+    })
+  });
+
+  // 6. Download keys as JSON
+  if (response.ok) {
+    downloadKeysAsJSON({
+      email: userEmail,
+      kyberKeys: keypairs.kyberKeys,
+      dilithiumKeys: keypairs.dilithiumKeys,
+      recoveryPhrase: result.data.recoveryPhrase
+    });
+  }
+}
+```
+
+---
+
+## 📄 Document Creation Flow
+
+### Backend Implementation
 
 ```typescript
-// Get VDC chain statistics
-authHandler.get('/vdc/stats', async (c) => {
-  try {
-    const env = c.env;
-    const vdc = await initializeVDC(env);
-    const stats = await vdc.getStats();
-    
-    return c.json<APIResponse>({
-      success: true,
-      data: stats
-    });
-  } catch (error) {
-    console.error('Error getting VDC stats:', error);
-    return c.json<APIResponse>({ success: false, error: 'Internal server error' }, 500);
-  }
-});
+// src/handlers/docs.ts
+import { initializeVDC, addDocumentToVDC } from '../utils/blockchain';
 
-// Initialize genesis block (one-time, admin only)
-authHandler.post('/vdc/initialize-genesis', async (c) => {
-  try {
-    const env = c.env;
-    
-    // Check if system keys are configured
-    if (!env.SYSTEM_DILITHIUM_PRIVATE_KEY || !env.SYSTEM_DILITHIUM_PUBLIC_KEY) {
-      return c.json<APIResponse>({
-        success: false,
-        error: 'System master keys not configured in Cloudflare Secrets'
-      }, 500);
-    }
-    
-    const vdc = await initializeVDC(env);
-    const genesisBlock = await vdc.createGenesisBlock();
-    
-    return c.json<APIResponse>({
-      success: true,
-      data: genesisBlock,
-      message: 'VDC Genesis block created successfully'
-    });
-  } catch (error) {
-    if (error.message.includes('already exists')) {
-      return c.json<APIResponse>({
-        success: false,
-        error: 'Genesis block already exists'
-      }, 400);
-    }
-    
-    console.error('Error creating genesis block:', error);
-    return c.json<APIResponse>({ 
-      success: false, 
-      error: error.message || 'Internal server error' 
-    }, 500);
-  }
-});
+docsHandler.post('/create', async (c) => {
+  const env = c.env;
+  const { 
+    title,
+    documentData,        // Already encrypted client-side
+    userDilithiumPrivateKey,  // For signing
+    userDilithiumPublicKey
+  } = await c.req.json();
 
-// Manually mine a block (admin endpoint)
-authHandler.post('/vdc/mine-block', async (c) => {
-  try {
-    const env = c.env;
-    const { adminSecret } = await c.req.json();
-    
-    // Verify admin credentials
-    if (adminSecret !== env.ADMIN_SECRET_KEY) {
-      return c.json<APIResponse>({ success: false, error: 'Unauthorized' }, 401);
-    }
-    
-    const vdc = await initializeVDC(env);
-    const block = await vdc.mineBlock();
-    
-    return c.json<APIResponse>({
-      success: true,
-      data: block,
-      message: `Block ${block.blockNumber} mined successfully with ${block.transactions.length} transactions`
-    });
-  } catch (error) {
-    console.error('Error mining block:', error);
-    return c.json<APIResponse>({ 
-      success: false, 
-      error: error.message || 'Internal server error' 
-    }, 500);
-  }
-});
+  // Authenticate user
+  const user = await authenticateUser(c);
 
-// Get block by number
-authHandler.get('/vdc/block/:blockNumber', async (c) => {
-  try {
-    const env = c.env;
-    const blockNumber = parseInt(c.req.param('blockNumber'));
-    
-    if (isNaN(blockNumber)) {
-      return c.json<APIResponse>({ success: false, error: 'Invalid block number' }, 400);
+  // Upload to IPFS
+  const ipfsHash = await uploadToIPFS(documentData);
+
+  // Calculate document hash
+  const documentHash = await crypto.sha256(documentData);
+
+  // Initialize VDC
+  const vdc = await initializeVDC(env);
+
+  // Add document to VDC with dual signatures
+  const documentId = generateId();
+  const txId = await addDocumentToVDC(
+    vdc,
+    documentId,
+    documentHash,
+    ipfsHash,
+    { title, creator: user.id, timestamp: Date.now() },
+    userDilithiumPrivateKey,
+    userDilithiumPublicKey
+  );
+
+  return c.json({
+    success: true,
+    data: {
+      documentId,
+      txId,
+      ipfsHash,
+      hash: documentHash
     }
-    
-    const vdc = await initializeVDC(env);
-    const block = await vdc.getBlock(blockNumber);
+  });
+});
+```
+
+---
+
+## 🔍 Querying the Blockchain
+
+### Get Blockchain Statistics
+
+```bash
+GET /api/vdc/stats
+```
+
+```json
+{
+  "success": true,
+  "data": {
+    "initialized": true,
+    "chain": "VeritasByMaataraBlockChain (VDC)",
+    "totalBlocks": 5,
+    "latestBlock": {
+      "number": 4,
+      "hash": "abc123...",
+      "ipfsHash": "QmXXX...",
+      "timestamp": 1735900000000
+    },
+    "pendingTransactions": 3,
+    "genesisHash": "000000..."
+  }
+}
+```
+
+### Get Specific Block
+
+```bash
+GET /api/vdc/block/:blockNumber
+```
+
+```json
+{
+  "success": true,
+  "data": {
+    "blockNumber": 1,
+    "timestamp": 1735888800000,
+    "previousHash": "genesis-hash",
+    "hash": "block1-hash",
+    "transactions": [
+      {
+        "id": "vdc_tx_123",
+        "type": "user_registration",
+        "timestamp": 1735888790000,
+        "data": {
+          "userId": "user_123",
+          "email": "user@example.com",
+          "kyberPublicKey": "...",
+          "dilithiumPublicKey": "...",
+          "encryptedUserData": "...",
+          "accountType": "admin"
+        },
+        "signatures": {
+          "user": {
+            "publicKey": "user-dilithium-public",
+            "signature": "user-dilithium-signature"
+          },
+          "system": {
+            "publicKey": "system-dilithium-public",
+            "signature": "system-dilithium-signature",
+            "keyVersion": 1
+          }
+        }
+      }
+    ],
+    "merkleRoot": "merkle-root-hash",
+    "blockSignature": {
+      "publicKey": "system-dilithium-public",
+      "signature": "block-signature",
+      "keyVersion": 1
+    },
+    "ipfsHash": "QmYYY..."
+  }
+}
+```
+
+### Verify Block
+
+```bash
+GET /api/vdc/verify/:blockNumber
+```
+
+```json
+{
+  "success": true,
+  "data": {
+    "blockNumber": 1,
+    "blockHashValid": true,
+    "merkleRootValid": true,
+    "blockSignatureValid": true,
+    "transactionSignaturesValid": true,
+    "previousHashValid": true,
+    "allChecks": true
+  }
+}
+```
+
+---
+
+## 🔒 Verification & Security
+
+### Verify Transaction Signatures
+
+```typescript
+// src/utils/blockchain.ts
+async verifyTransaction(transaction: VDCTransaction): Promise<boolean> {
+  const txData = {
+    id: transaction.id,
+    type: transaction.type,
+    timestamp: transaction.timestamp,
+    data: transaction.data
+  };
+
+  // Verify user signature
+  const userSigValid = await this.maataraClient.verifySignature(
+    JSON.stringify(txData),
+    transaction.signatures.user.signature,
+    transaction.signatures.user.publicKey
+  );
+
+  if (!userSigValid) {
+    console.error('❌ User signature invalid');
+    return false;
+  }
+
+  // Verify system signature
+  const systemSigValid = await this.maataraClient.verifySignature(
+    JSON.stringify(txData),
+    transaction.signatures.system.signature,
+    transaction.signatures.system.publicKey
+  );
+
+  if (!systemSigValid) {
+    console.error('❌ System signature invalid');
+    return false;
+  }
+
+  return true;
+}
+```
+
+### Verify Entire Blockchain
+
+```typescript
+async function verifyEntireChain(vdc: VDCBlockchain): Promise<boolean> {
+  const latest = await vdc.getLatestBlock();
+
+  for (let i = 0; i <= latest.blockNumber; i++) {
+    const block = await vdc.getBlock(i);
     
     if (!block) {
-      return c.json<APIResponse>({ success: false, error: 'Block not found' }, 404);
+      console.error(`❌ Block ${i} not found`);
+      return false;
     }
-    
-    return c.json<APIResponse>({
-      success: true,
-      data: block
-    });
-  } catch (error) {
-    console.error('Error getting block:', error);
-    return c.json<APIResponse>({ success: false, error: 'Internal server error' }, 500);
-  }
-});
 
-// Get transaction by ID
-authHandler.get('/vdc/transaction/:txId', async (c) => {
-  try {
-    const env = c.env;
-    const txId = c.req.param('txId');
-    
-    const vdc = await initializeVDC(env);
-    const transaction = await vdc.getTransaction(txId);
-    
-    if (!transaction) {
-      return c.json<APIResponse>({ success: false, error: 'Transaction not found' }, 404);
+    // Verify block integrity
+    const blockValid = await vdc.verifyBlock(block);
+    if (!blockValid) {
+      console.error(`❌ Block ${i} verification failed`);
+      return false;
     }
-    
-    return c.json<APIResponse>({
-      success: true,
-      data: transaction
-    });
-  } catch (error) {
-    console.error('Error getting transaction:', error);
-    return c.json<APIResponse>({ success: false, error: 'Internal server error' }, 500);
+
+    // Verify chain linkage (except genesis)
+    if (i > 0) {
+      const previousBlock = await vdc.getBlock(i - 1);
+      if (block.previousHash !== previousBlock.hash) {
+        console.error(`❌ Block ${i} chain linkage broken`);
+        return false;
+      }
+    }
   }
-});
+
+  console.log(`✅ All ${latest.blockNumber + 1} blocks verified`);
+  return true;
+}
 ```
 
-## Frontend Changes Required
+---
 
-### Update Activation Flow
+## 📡 API Reference
 
-The frontend needs to send the Dilithium private key temporarily for signing the transaction.
+### VDC Endpoints
 
-**IMPORTANT:** The private key is ONLY used to sign the transaction and is NEVER stored by the server!
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/vdc/stats` | GET | Get blockchain statistics |
+| `/api/vdc/latest-block` | GET | Get latest block |
+| `/api/vdc/block/:blockNumber` | GET | Get specific block |
+| `/api/vdc/verify/:blockNumber` | GET | Verify block integrity |
+| `/api/vdc/transaction/:txId` | GET | Get transaction by ID |
+
+### VDCBlockchain Class Methods
 
 ```typescript
-// In frontend app.ts - activation flow
+class VDCBlockchain {
+  // Initialization
+  async initialize(): Promise<void>
+  async createGenesisBlock(): Promise<VDCBlock>
 
-// Generate keys
-const { kyberPublicKey, kyberPrivateKey, dilithiumPublicKey, dilithiumPrivateKey } = 
-  await generateClientKeypair();
+  // Transaction Management
+  async addTransaction(
+    type: VDCTransaction['type'],
+    data: VDCTransaction['data'],
+    userDilithiumPrivateKey: string,
+    userDilithiumPublicKey: string
+  ): Promise<string>
 
-// Create transaction data
-const txData = {
-  userId,
-  email,
-  kyberPublicKey,
-  dilithiumPublicKey,
-  encryptedUserData,
-  accountType, // From invite
-  timestamp: Date.now()
-};
+  async addUserRegistrationWithSignature(
+    data: VDCTransaction['data'],
+    userSignature: string,
+    userDilithiumPublicKey: string
+  ): Promise<string>
 
-// USER SIGNS THE TRANSACTION
-const userSignature = await VeritasCrypto.signData(
-  JSON.stringify(txData),
-  dilithiumPrivateKey
-);
+  async addAdminAction(
+    action: string,
+    payload: Record<string, any>
+  ): Promise<{ transaction: VDCTransaction; pendingCount: number }>
 
-// Send to server (include dilithiumPrivateKey ONLY for signing)
-const response = await fetch('/api/auth/activate', {
-  method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({
-    token,
-    kyberPublicKey,
-    dilithiumPublicKey,
-    dilithiumPrivateKey, // ONLY for signing, server doesn't store this!
-    encryptedUserData,
-    userSignature
-  })
-});
+  // Block Mining
+  async mineBlock(): Promise<VDCBlock>
 
-// Server will:
-// 1. Verify user signature
-// 2. Add system signature
-// 3. Store transaction with DUAL signatures in VDC
+  // Querying
+  async getLatestBlock(): Promise<VDCBlock>
+  async getBlock(blockNumber: number): Promise<VDCBlock | null>
+  async getTransaction(txId: string): Promise<VDCTransaction | null>
+  async getStats(): Promise<any>
 
-// User must save BOTH private keys!
-savePrivateKeys(kyberPrivateKey, dilithiumPrivateKey);
+  // Verification
+  async verifyTransaction(transaction: VDCTransaction): Promise<boolean>
+  async verifyBlock(block: VDCBlock): Promise<boolean>
+}
 ```
 
-## Deployment Steps
+### Helper Functions
 
-1. **Generate system master keys**
-   ```bash
-   node generate-system-keys.js
-   ```
+```typescript
+// Initialize VDC blockchain
+export async function initializeVDC(env: Environment): Promise<VDCBlockchain>
 
-2. **Configure Cloudflare Secrets**
-   ```powershell
-   .\setup-cloudflare-secrets.ps1
-   ```
+// Add user registration
+export async function addUserToVDC(
+  vdc: VDCBlockchain,
+  userId: string,
+  email: string,
+  kyberPublicKey: string,
+  dilithiumPublicKey: string,
+  encryptedUserData: any,
+  accountType: 'admin' | 'paid' | 'invited',
+  userSignature: string
+): Promise<string>
 
-3. **Update auth.ts** with VDC integration code above
+// Add document
+export async function addDocumentToVDC(
+  vdc: VDCBlockchain,
+  documentId: string,
+  documentHash: string,
+  ipfsHash: string,
+  metadata: any,
+  userDilithiumPrivateKey: string,
+  userDilithiumPublicKey: string
+): Promise<string>
 
-4. **Build and deploy**
-   ```bash
-   npm run build
-   wrangler deploy --env production
-   ```
+// Add asset transfer
+export async function addAssetTransferToVDC(
+  vdc: VDCBlockchain,
+  assetId: string,
+  fromUserId: string,
+  toUserId: string,
+  userDilithiumPrivateKey: string,
+  userDilithiumPublicKey: string
+): Promise<string>
+```
 
-5. **Initialize genesis block**
-   ```bash
-   node initialize-genesis-block.js
-   ```
+---
 
-6. **Test user registration**
-   - Create new invite link
-   - Activate account
-   - Check VDC stats: `curl https://veritas-docs-production.rme-6e5.workers.dev/api/auth/vdc/stats`
+## 🎯 Best Practices
 
-7. **Mine first block**
-   After 10 user registrations, or manually:
-   ```bash
-   curl -X POST https://veritas-docs-production.rme-6e5.workers.dev/api/auth/vdc/mine-block \
-     -H "Content-Type: application/json" \
-     -d '{"adminSecret":"YOUR_ADMIN_SECRET"}'
-   ```
+### 1. Always Verify Signatures
 
-## Block Mining Strategy
+```typescript
+// Before processing any transaction
+const isValid = await vdc.verifyTransaction(transaction);
+if (!isValid) {
+  throw new Error('Invalid transaction signature');
+}
+```
 
-**Automatic mining triggers:**
-- After 10 pending transactions
-- After 5 minutes (implement cron trigger)
-- Immediately for critical admin actions
+### 2. Mine Blocks Periodically
 
-**Manual mining:**
-- Admin endpoint: `/api/auth/vdc/mine-block`
-- Requires admin secret key
+```typescript
+// Check pending transaction count
+const stats = await vdc.getStats();
 
-## Verification
+if (stats.pendingTransactions >= 10) {
+  // Mine a new block
+  const newBlock = await vdc.mineBlock();
+  console.log(`Mined block ${newBlock.blockNumber}`);
+}
+```
 
-After deployment, verify:
+### 3. Backup Genesis Data
 
-1. **Genesis block exists:**
-   ```bash
-   curl https://veritas-docs-production.rme-6e5.workers.dev/api/auth/vdc/stats
-   ```
+```typescript
+// Store genesis data for recovery
+const genesisData = await env.VERITAS_KV.get('vdc:genesis');
+// Backup to secure offsite storage
+```
 
-2. **User registration creates transaction:**
-   - Activate account
-   - Check pending count increases
+### 4. Monitor Blockchain Health
 
-3. **Block mining works:**
-   - Create 10 users OR manually mine
-   - Verify block created with transactions
+```typescript
+// Regular health checks
+const stats = await vdc.getStats();
+console.log(`Blocks: ${stats.totalBlocks}, Pending: ${stats.pendingTransactions}`);
 
-4. **Dual signatures present:**
-   - Get transaction from block
-   - Verify both user and system signatures exist
+// Verify chain integrity
+const chainValid = await verifyEntireChain(vdc);
+if (!chainValid) {
+  console.error('⚠️  Blockchain verification failed!');
+  // Alert admins
+}
+```
 
-5. **Chain integrity:**
-   - Each block references previous block hash
-   - All transactions have dual signatures
-   - IPFS hashes stored correctly
+---
 
-## Success Criteria
+## 🔗 Related Documentation
 
-✅ Genesis block created with system signature
-✅ User registrations add transactions to pending pool
-✅ Transactions have dual signatures (user + system)
-✅ Blocks mine automatically at threshold
-✅ All blocks stored in KV and IPFS
-✅ Chain verification passes
-✅ Account type set from invite (not user-definable)
-✅ Zero-knowledge: encrypted data never exposed
+- [**BLOCKCHAIN_ARCHITECTURE.md**](./BLOCKCHAIN_ARCHITECTURE.md) - VDC blockchain design principles
+- [**ZERO_KNOWLEDGE_ARCHITECTURE.md**](./ZERO_KNOWLEDGE_ARCHITECTURE.md) - Zero-knowledge security model
+- [**SECURITY_ARCHITECTURE.md**](./SECURITY_ARCHITECTURE.md) - Complete security design
+- [**TECHNICAL_STATUS.md**](./TECHNICAL_STATUS.md) - Current implementation status
+
+---
+
+**Version**: 1.0.1  
+**Last Updated**: January 3, 2025  
+**Status**: Production Ready  
+**Deployment**: https://veritas-docs-production.rme-6e5.workers.dev

@@ -1,9 +1,36 @@
-# Security Guardrails - Account Creation Flow
+# Security Guardrails - Account Activation & Key Management
+
+**Version**: 1.0.1  
+**Last Updated**: January 3, 2025  
+**Status**: Production
+
+---
 
 ## Overview
-Comprehensive security warnings and guardrails have been implemented in the account activation flow to ensure users understand the critical importance of key management in our zero-knowledge architecture.
 
-## What's New
+Comprehensive security warnings and guardrails protect users during account activation, ensuring they understand the critical importance of key management in our **zero-knowledge architecture**. Users cannot proceed to login without explicitly acknowledging that private key loss means permanent loss of access.
+
+---
+
+## Core Security Principles
+
+### Zero-Knowledge Architecture
+- **Server never sees private keys**: All key generation happens client-side in browser
+- **No password recovery**: Server cannot decrypt user data or reset access
+- **Client-side encryption**: All personal data encrypted with Kyber-768 before transmission
+- **Immutable audit trail**: VDC blockchain records all actions with dual signatures
+
+### Machine Identities (System Accounts)
+- **System master account**: Required for VDC blockchain consensus and dual signatures
+- **Split secret storage**: Dilithium private key split into PART1 + PART2 stored separately
+- **Runtime reconstruction**: System key reassembled only in worker memory, never persisted whole
+- **Limited capabilities**: System account can only co-sign user-initiated transactions
+
+For detailed machine identity security architecture, see [ZERO_KNOWLEDGE_ARCHITECTURE.md § Machine Identities](./ZERO_KNOWLEDGE_ARCHITECTURE.md#machine-identities--system-accounts).
+
+---
+
+## What's New in v1.0.1
 
 ### 1. Enhanced Key Display (Activation Success Page)
 When users complete account activation, they now see:
@@ -189,20 +216,48 @@ Documents meet digital evidence standards in:
 
 ✅ **Deployed to Production**: https://veritas-docs-production.rme-6e5.workers.dev
 
+### Production Environment
+- **KV Namespace**: 9f0ea31309cd44cab7bfe3569e16aa45
+- **System Keys**: Split across DILITHIUM_PRIVATE_KEY_PART1 + PART2 Cloudflare Secrets
+- **IPFS**: Pinata production pinning service
+- **Blockchain**: VDC blockchain with dual signatures
+
 ### Test the Flow:
-1. Visit activation link: `/activate?token=admin_1759425200149_506ee4b9`
-2. Fill personal details
-3. See enhanced key display with warnings
-4. Click "Continue to Login"
-5. Read and check all 4 security confirmations
-6. Proceed to login only after understanding risks
+1. Request activation token from admin
+2. Visit activation link: `/activate?token=<your-token>`
+3. Fill personal details (encrypted client-side before submission)
+4. See enhanced key display with color-coded warnings
+5. **Save private key** (required for all future logins)
+6. Click "Continue to Login"
+7. Read and check all 4 security confirmations
+8. Proceed to login only after understanding risks
+
+---
 
 ## User Education
 
 The implementation balances:
-- **Serious warnings** about key loss consequences
+- **Serious warnings** about key loss consequences (permanent access loss)
 - **Friendly guidance** with light touches of humor ("under your pillow")
-- **Professional legal compliance** messaging
-- **Clear action items** (checkboxes must all be checked)
+- **Professional legal compliance** messaging (NIST standards, court admissibility)
+- **Clear action items** (checkboxes must all be checked to proceed)
+- **Zero-knowledge transparency** (explains why server cannot help with key recovery)
 
 This ensures users cannot proceed without actively acknowledging the zero-knowledge architecture implications while maintaining a pleasant user experience.
+
+---
+
+## Security Architecture References
+
+For comprehensive security details, see:
+- [SECURITY_ARCHITECTURE.md](./SECURITY_ARCHITECTURE.md) - Complete security design and threat model
+- [ZERO_KNOWLEDGE_ARCHITECTURE.md](./ZERO_KNOWLEDGE_ARCHITECTURE.md) - Zero-knowledge principles and machine identities
+- [VDC_INTEGRATION_GUIDE.md](./VDC_INTEGRATION_GUIDE.md) - Blockchain integration and dual signatures
+- [ACTIVATION_TOKEN_FLOW.md](./ACTIVATION_TOKEN_FLOW.md) - Activation process technical details
+
+---
+
+**Version**: 1.0.1  
+**Last Updated**: January 3, 2025  
+**Status**: Production  
+**Production URL**: https://veritas-docs-production.rme-6e5.workers.dev

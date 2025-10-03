@@ -6,9 +6,10 @@
   "main": "src/index.ts",
   "scripts": {
     "dev": "wrangler dev",
-    "deploy": "npm run build:frontend && wrangler deploy",
+    "deploy": "npm run build:frontend && npm run upload-docs && wrangler deploy",
     "build": "tsc",
     "build:frontend": "node esbuild.frontend.js",
+    "upload-docs": "node scripts/upload-docs.js",
     "test": "vitest",
     "lint": "eslint src/**/*.ts",
     "format": "prettier --write src/**/*.ts"

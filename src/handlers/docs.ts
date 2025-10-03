@@ -324,13 +324,40 @@ function renderDocsIndex(
 }
 
 docsHandler.get('/', async (c) => {
+  const env = c.env;
   const docs = Object.entries(DOCS_CATALOG);
-  const userDocs = docs
+  let userDocs = docs
     .filter(([, meta]) => meta.audience === 'users')
     .sort((a, b) => a[1].priority - b[1].priority);
-  const developerDocs = docs
+  let developerDocs = docs
     .filter(([, meta]) => meta.audience === 'developers')
     .sort((a, b) => a[1].priority - b[1].priority);
+
+  // If a KV index exists, enrich the catalog dynamically
+  const indexRaw = await env.VERITAS_KV.get('docs:index');
+  if (indexRaw) {
+    try {
+      const index = JSON.parse(indexRaw) as Array<any>;
+      const dynamicEntries: Array<[string, DocCatalogEntry]> = index.map((d) => [
+        d.slug,
+        {
+          file: d.file,
+          title: d.title || d.slug,
+          category: d.category || 'Documentation',
+          audience: (d.audience as DocAudience) || 'developers',
+          priority: d.priority ?? 99,
+          description: d.summary || 'Documentation',
+          keywords: d.keywords || [],
+        },
+      ]);
+      const combined = new Map<string, DocCatalogEntry>([...docs, ...dynamicEntries]);
+      const all = Array.from(combined.entries());
+      userDocs = all.filter(([, m]) => m.audience === 'users').sort((a, b) => a[1].priority - b[1].priority);
+      developerDocs = all
+        .filter(([, m]) => m.audience === 'developers')
+        .sort((a, b) => a[1].priority - b[1].priority);
+    } catch {}
+  }
 
   return c.html(renderDocsIndex(userDocs, developerDocs));
 });
@@ -355,14 +382,13 @@ docsHandler.get('/:slug/raw', async (c) => {
   const slug = c.req.param('slug');
   const docMeta = DOCS_CATALOG[slug];
 
-  if (!docMeta) {
-    return c.text('Documentation not found', 404);
-  }
-
-  const mdContent = await env.VERITAS_KV.get(`docs:${docMeta.file}`);
+  // Try catalog first, then fallback to direct KV lookup by filename `${slug}.md`
+  const fileName = docMeta?.file ?? `${slug}.md`;
+  const mdKey = `docs:${fileName}`;
+  const mdContent = await env.VERITAS_KV.get(mdKey);
 
   if (!mdContent) {
-    return c.text(`Documentation file ${docMeta.file} not found`, 404);
+    return c.text(`Documentation file ${fileName} not found`, 404);
   }
 
   return c.text(mdContent, 200, {
@@ -370,31 +396,59 @@ docsHandler.get('/:slug/raw', async (c) => {
   });
 });
 
+// List documents from KV index if available, else from static catalog (JSON)
+// Moved from '/' to '/index.json' to avoid clashing with the HTML index route above
+docsHandler.get('/index.json', async (c) => {
+  const env = c.env;
+  // Attempt to read an auto-generated docs index uploaded at build time
+  const indexRaw = await env.VERITAS_KV.get('docs:index');
+  if (indexRaw) {
+    try {
+      const index = JSON.parse(indexRaw);
+      return c.json<APIResponse>({ success: true, data: { docs: index } });
+    } catch {}
+  }
+  // Fallback to static catalog keys
+  return c.json<APIResponse>({ success: true, data: { docs: Object.keys(DOCS_CATALOG) } });
+});
+
 docsHandler.get('/:slug', async (c) => {
   const env = c.env;
   const slug = c.req.param('slug');
-  const docMeta = DOCS_CATALOG[slug];
+  let docMeta = DOCS_CATALOG[slug];
 
+  // Fallback 1: Treat slug as a direct filename base, e.g. README -> README.md
+  // Fallback 2: Try KV-stored docs index (docs:index) to resolve file mapping
+  let fileName = docMeta?.file ?? `${slug}.md`;
   if (!docMeta) {
-    return c.json<APIResponse>(
-      {
-        success: false,
-        error: 'Documentation not found',
-        data: {
-          available: Object.keys(DOCS_CATALOG),
-        },
-      },
-      404,
-    );
+    const indexRaw = await env.VERITAS_KV.get('docs:index');
+    if (indexRaw) {
+      try {
+        const index = JSON.parse(indexRaw) as Array<{ slug: string; file: string; title?: string; category?: string; audience?: string; priority?: number; keywords?: string[] }>;
+        const found = index.find((d) => d.slug === slug || d.file === fileName);
+        if (found) {
+          fileName = found.file;
+          docMeta = {
+            file: found.file,
+            title: found.title || slug.replace(/_/g, ' '),
+            category: found.category || 'Documentation',
+            audience: (found.audience as DocAudience) || 'developers',
+            priority: found.priority ?? 99,
+            description: found.title || 'Documentation',
+            keywords: found.keywords || [],
+          };
+        }
+      } catch {}
+    }
   }
 
-  const mdContent = await env.VERITAS_KV.get(`docs:${docMeta.file}`);
+  const mdContent = await env.VERITAS_KV.get(`docs:${fileName}`);
 
   if (!mdContent) {
     return c.json<APIResponse>(
       {
         success: false,
-        error: `Documentation file ${docMeta.file} not found in storage. Run 'npm run upload-docs' to upload documentation.`,
+        error: `Documentation file ${fileName} not found in storage. Run 'npm run upload-docs' to upload documentation.`,
       },
       404,
     );
@@ -406,12 +460,12 @@ docsHandler.get('/:slug', async (c) => {
     success: true,
     data: {
       slug,
-      title: docMeta.title,
-      category: docMeta.category,
-      audience: docMeta.audience,
-      description: docMeta.description,
-      keywords: docMeta.keywords,
-      file: docMeta.file,
+      title: (docMeta?.title) ?? slug.replace(/_/g, ' '),
+      category: (docMeta?.category) ?? 'Documentation',
+      audience: (docMeta?.audience) ?? 'developers',
+      description: (docMeta?.description) ?? 'Documentation',
+      keywords: (docMeta?.keywords) ?? [],
+      file: fileName,
       version: versionMeta.version,
       lastUpdated: versionMeta.lastUpdated,
       status: versionMeta.status,

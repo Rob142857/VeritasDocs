@@ -1,0 +1,176 @@
+[
+  {
+    "slug": "README",
+    "file": "README.md",
+    "version": "1.1.0",
+    "lastUpdated": "October 3, 2025",
+    "status": "Production",
+    "audience": "Legal, Users, Developers",
+    "category": "Overview",
+    "priority": 1,
+    "title": "🔐 Veritas Documents\r",
+    "keywords": [
+      "overview",
+      "legal",
+      "platform",
+      "security",
+      "blockchain"
+    ]
+  },
+  {
+    "slug": "SECURITY_GUARDRAILS",
+    "file": "SECURITY_GUARDRAILS.md",
+    "version": "1.1.0",
+    "lastUpdated": "October 3, 2025",
+    "status": "Production",
+    "audience": "Users",
+    "category": "User Guide",
+    "priority": 2,
+    "title": "Security Guardrails - Account Activation & Key Management\r",
+    "keywords": [
+      "security",
+      "keys",
+      "activation",
+      "backup",
+      "zero-knowledge"
+    ]
+  },
+  {
+    "slug": "SECURITY_ARCHITECTURE",
+    "file": "SECURITY_ARCHITECTURE.md",
+    "version": "1.1.0",
+    "lastUpdated": "October 3, 2025",
+    "status": "Production",
+    "audience": "developers",
+    "category": "Documentation",
+    "priority": 99,
+    "title": "🔐 Veritas Documents Security Architecture\r",
+    "keywords": []
+  },
+  {
+    "slug": "ZERO_KNOWLEDGE_ARCHITECTURE",
+    "file": "ZERO_KNOWLEDGE_ARCHITECTURE.md",
+    "version": "1.1.0",
+    "lastUpdated": "October 3, 2025",
+    "status": "Production",
+    "audience": "Developers, Legal",
+    "category": "Architecture",
+    "priority": 5,
+    "title": "Zero-Knowledge Architecture - Post-Quantum Implementation\r",
+    "keywords": [
+      "zero-knowledge",
+      "kyber",
+      "dilithium",
+      "machine identity",
+      "compliance"
+    ]
+  },
+  {
+    "slug": "BLOCKCHAIN_ARCHITECTURE",
+    "file": "BLOCKCHAIN_ARCHITECTURE.md",
+    "version": "1.1.0",
+    "lastUpdated": "October 3, 2025",
+    "status": "Production",
+    "audience": "developers",
+    "category": "Documentation",
+    "priority": 99,
+    "title": "Veritas Documents Blockchain Architecture\r",
+    "keywords": [
+      "blockchain",
+      "architecture",
+      "consensus",
+      "signatures",
+      "compliance"
+    ]
+  },
+  {
+    "slug": "BLOCKCHAIN_USER_SYSTEM",
+    "file": "BLOCKCHAIN_USER_SYSTEM.md",
+    "version": "1.1.0",
+    "lastUpdated": "October 3, 2025",
+    "status": "Production",
+    "audience": "Developers, Legal",
+    "category": "Architecture",
+    "priority": 7,
+    "title": "Blockchain-Based User Registration System\r",
+    "keywords": [
+      "registration",
+      "blockchain",
+      "workflow",
+      "signatures",
+      "compliance"
+    ]
+  },
+  {
+    "slug": "VDC_INTEGRATION_GUIDE",
+    "file": "VDC_INTEGRATION_GUIDE.md",
+    "version": "1.0.1",
+    "lastUpdated": "January 3, 2025",
+    "status": "Production",
+    "audience": "developers",
+    "category": "Documentation",
+    "priority": 99,
+    "title": "VDC Blockchain Integration Guide\r",
+    "keywords": []
+  },
+  {
+    "slug": "DEVELOPMENT_PLAN",
+    "file": "DEVELOPMENT_PLAN.md",
+    "version": "1.1.0",
+    "lastUpdated": "October 3, 2025",
+    "status": "Production Roadmap",
+    "audience": "developers",
+    "category": "Documentation",
+    "priority": 99,
+    "title": "Development Plan - Veritas Documents\r",
+    "keywords": [
+      "roadmap",
+      "planning",
+      "milestones",
+      "backlog",
+      "priorities"
+    ]
+  },
+  {
+    "slug": "TECHNICAL_STATUS",
+    "file": "TECHNICAL_STATUS.md",
+    "version": "1.1.0",
+    "lastUpdated": "January 3, 2025",
+    "status": "Production",
+    "audience": "developers",
+    "category": "Documentation",
+    "priority": 99,
+    "title": "Veritas Documents - Technical Architecture & Implementation Status\r",
+    "keywords": []
+  },
+  {
+    "slug": "ACTIVATION_TOKEN_FLOW",
+    "file": "ACTIVATION_TOKEN_FLOW.md",
+    "version": "1.1.0",
+    "lastUpdated": "October 3, 2025",
+    "status": "Production",
+    "audience": "Users, Developers",
+    "category": "User Guide",
+    "priority": 3,
+    "title": "Activation Token Flow - Veritas Documents\r",
+    "keywords": [
+      "activation",
+      "onboarding",
+      "token",
+      "workflow",
+      "zero-knowledge"
+    ]
+  },
+  {
+    "slug": "QUICK_REFERENCE",
+    "file": "QUICK_REFERENCE.md",
+    "version": "1.0.1",
+    "lastUpdated": "January 3, 2025",
+    "status": "Production",
+    "audience": "developers",
+    "category": "Documentation",
+    "priority": 99,
+    "title": "Veritas Documents - Quick Reference Guide\r",
+    "keywords": []
+  }
+]

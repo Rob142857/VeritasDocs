@@ -473,7 +473,11 @@ app.get('/static/app.bundle.js', async (c) => {
   try {
     // Try to load from KV first
     const env = c.env as Environment;
-    const bundle = await env.VERITAS_KV.get('frontend-bundle');
+    let bundle = await env.VERITAS_KV.get('frontend-bundle');
+    if (!bundle) {
+      // Fallback to legacy key name used in some manual uploads
+      bundle = await env.VERITAS_KV.get('app-bundle');
+    }
     if (bundle) {
       return c.text(bundle, 200, { 'Content-Type': 'application/javascript' });
     }
@@ -856,7 +860,9 @@ class VeritasApp {
       
       const data = await response.json();
       if (data.success) {
-        viewer.innerHTML = data.data.html;
+        // Convert markdown to HTML
+        const html = this.markdownToHtml(data.data.content);
+        viewer.innerHTML = html;
       } else {
         viewer.innerHTML = '<div class="alert alert-error">Failed to load documentation</div>';
       }
@@ -864,6 +870,44 @@ class VeritasApp {
       console.error('Error loading doc:', error);
       viewer.innerHTML = '<div class="alert alert-error">Failed to load documentation. Please try again later.</div>';
     }
+  }
+
+  // Simple markdown to HTML converter
+  markdownToHtml(markdown) {
+    if (!markdown) return '';
+
+    return markdown
+      // Headers
+      .replace(/^### (.*$)/gim, '<h3>$1</h3>')
+      .replace(/^## (.*$)/gim, '<h2>$1</h2>')
+      .replace(/^# (.*$)/gim, '<h1>$1</h1>')
+      
+      // Bold and italic
+      .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+      .replace(/\*(.*?)\*/g, '<em>$1</em>')
+      
+      // Code blocks
+      .replace(/```([\s\S]*?)```/g, '<pre><code>$1</code></pre>')
+      .replace(/`([^`]+)`/g, '<code>$1</code>')
+      
+      // Links
+      .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>')
+      
+      // Lists
+      .replace(/^\* (.*$)/gim, '<li>$1</li>')
+      .replace(/^\d+\. (.*$)/gim, '<li>$1</li>')
+      .replace(/(<li>.*<\/li>\n?)+/g, '<ul>$&</ul>')
+      
+      // Line breaks
+      .replace(/\n\n/g, '</p><p>')
+      .replace(/\n/g, '<br>')
+      
+      // Wrap in paragraph tags
+      .replace(/^(.+?)(<\/p><p>|$)/, '<p>$1</p>')
+      
+      // Clean up empty paragraphs
+      .replace(/<p><\/p>/g, '')
+      .replace(/<p><br><\/p>/g, '');
   }
 
   renderActivationPage(token) {

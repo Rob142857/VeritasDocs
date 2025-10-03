@@ -22,7 +22,7 @@ export class IPFSClient {
   async uploadToIPFS(data: string | Uint8Array): Promise<string> {
     try {
       if (!this.pinataApiKey || !this.pinataSecretKey) {
-        throw new Error('Pinata API keys not configured. Please set PINATA_API_KEY and PINATA_SECRET_KEY environment variables.');
+        throw new Error('Pinata API keys not configured. Please set PINATA_API_KEY and PINATA_SECRET_API_KEY environment variables.');
       }
 
       // Convert data to the format Pinata expects

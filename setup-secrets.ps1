@@ -8,13 +8,13 @@ wrangler secret put STRIPE_WEBHOOK_SECRET --env production
 # When prompted, enter: whsec_your_webhook_secret_here
 
 wrangler secret put MAATARA_CHAIN_PRIVATE_KEY --env production
-# When prompted, enter: edaaa8774896953d9db5952b690228c5575c8f4bbcb1d98e6f5f306f25edbfe70df645325896e1ee88e9017119f63bf5d31a6a7470a7a0be4952f0506c8a3881
+# When prompted, enter: 50ce69d4ec909cfa83efb312314bfd1fbeec0584457342c15114386b74d58351c6ca1412bc744e4595626e2f4a289b74b78ac9a374add30be95c50f39fbc1caf
 
 wrangler secret put IPFS_API_KEY --env production
 # When prompted, enter: your_cloudflare_ipfs_api_key
 
 wrangler secret put ADMIN_SECRET_KEY --env production
-# When prompted, enter: 06e88356a928fd9077806f44a4142a83594afa09b8d5af90ae2fb3f31b3f4b33
+# When prompted, enter: 4da19f5ebd825ba8adf7f7deda8187acce3d750dce068a99036f1eb070b9abd7
 
 wrangler secret put ETHEREUM_PRIVATE_KEY --env production
 # When prompted, enter: 0x_your_ethereum_private_key

@@ -25,9 +25,9 @@ async function ensureCryptoReady(): Promise<void> {
   if (wasmInitialized) return;
   
   try {
-    // Initialize WASM with the URL to the WASM file
+    // Initialize WASM with the new API (single object parameter)
     const wasmUrl = '/static/core_pqc_wasm_bg.wasm';
-    await initWasm(wasmUrl);
+    await initWasm({ url: wasmUrl });
     wasmInitialized = true;
     console.log('✓ Post-quantum cryptography initialized');
   } catch (error) {
@@ -128,7 +128,9 @@ export async function generateClientKeypair(): Promise<{
     const testMessageB64u = b64uEncode(new TextEncoder().encode(testMessage));
     
     try {
-      const testSignResult = await (dilithiumSign as any)(testMessageB64u, dilithiumResult.secret_b64u);
+      // Decode the secret key from base64url to bytes for the WASM function
+      const secretKeyBytes = b64uDecode(dilithiumResult.secret_b64u);
+      const testSignResult = await (dilithiumSign as any)(testMessageB64u, secretKeyBytes);
       console.log('Dilithium test sign result:', testSignResult);
       
       if (testSignResult.error) {
@@ -172,13 +174,16 @@ export async function signData(data: string, dilithiumSecretB64u: string): Promi
   const messageB64u = b64uEncode(new TextEncoder().encode(data));
   
   console.log('Attempting to sign with Dilithium...');
-  console.log('Secret key length:', dilithiumSecretB64u.length);
-  console.log('Message length:', messageB64u.length);
+  console.log('Secret key b64u length:', dilithiumSecretB64u.length);
+  console.log('Message b64u length:', messageB64u.length);
   console.log('Data preview:', data.substring(0, 100));
   
-  // IMPORTANT: dilithiumSign takes (message, secretKey) - message FIRST!
-  // This matches the TypeScript definition and README example
-  const signResult = await (dilithiumSign as any)(messageB64u, dilithiumSecretB64u);
+  // Decode the secret key from base64url to bytes for the WASM function
+  const secretKeyBytes = b64uDecode(dilithiumSecretB64u);
+  console.log('Secret key bytes length:', secretKeyBytes.length);
+  
+  // IMPORTANT: dilithiumSign takes (messageB64u, secretKeyBytes) - message FIRST, secret key as bytes!
+  const signResult = await (dilithiumSign as any)(messageB64u, secretKeyBytes);
   
   console.log('Sign result:', signResult);
   
@@ -195,11 +200,15 @@ export async function verifySignature(data: string, signature: string, dilithium
   await ensureCryptoReady();
   
   const messageB64u = b64uEncode(new TextEncoder().encode(data));
-  const verifyResult = await (dilithiumVerify as any)(dilithiumPublicKey, messageB64u, signature);
+  
+  // Decode the public key from base64url to bytes for the WASM function
+  const publicKeyBytes = b64uDecode(dilithiumPublicKey);
+  
+  const verifyResult = await (dilithiumVerify as any)(messageB64u, signature, publicKeyBytes);
   
   if (verifyResult.error) return false;
   
-  return verifyResult.valid === true;
+  return verifyResult.is_valid === true;
 }
 
 // Make functions available globally for inline HTML usage

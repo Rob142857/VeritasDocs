@@ -551,7 +551,7 @@
     if (wasmInitialized) return;
     try {
       const wasmUrl = "/static/core_pqc_wasm_bg.wasm";
-      await initWasm(wasmUrl);
+      await initWasm({ url: wasmUrl });
       wasmInitialized = true;
       console.log("\u2713 Post-quantum cryptography initialized");
     } catch (error) {
@@ -605,6 +605,28 @@
       const dilithiumResult = await dilithiumKeygen();
       console.log("Dilithium keygen result:", dilithiumResult);
       if (dilithiumResult.error) throw new Error(dilithiumResult.error);
+      console.log("Testing Dilithium keys...");
+      const testMessage = "test message for dilithium";
+      const testMessageB64u = b64uEncode(new TextEncoder().encode(testMessage));
+      try {
+        const secretKeyBytes = b64uDecode(dilithiumResult.secret_b64u);
+        const testSignResult = await dilithiumSign(testMessageB64u, secretKeyBytes);
+        console.log("Dilithium test sign result:", testSignResult);
+        if (testSignResult.error) {
+          console.error("Dilithium test sign failed:", testSignResult.error);
+          throw new Error("Dilithium key test failed: " + testSignResult.error);
+        }
+        const testVerifyResult = await dilithiumVerify(testMessageB64u, testSignResult.signature_b64u, dilithiumResult.public_b64u);
+        console.log("Dilithium test verify result:", testVerifyResult);
+        if (testVerifyResult.error || !testVerifyResult.is_valid) {
+          console.error("Dilithium test verify failed:", testVerifyResult);
+          throw new Error("Dilithium key verification test failed");
+        }
+        console.log("\u2713 Dilithium keys tested successfully");
+      } catch (testError) {
+        console.error("Dilithium key test error:", testError);
+        throw new Error("Generated Dilithium keys are invalid: " + testError.message);
+      }
       return {
         kyberPublicKey: kyberResult.public_b64u,
         kyberPrivateKey: kyberResult.secret_b64u,
@@ -621,10 +643,12 @@
     await ensureCryptoReady();
     const messageB64u = b64uEncode(new TextEncoder().encode(data));
     console.log("Attempting to sign with Dilithium...");
-    console.log("Secret key length:", dilithiumSecretB64u.length);
-    console.log("Message length:", messageB64u.length);
+    console.log("Secret key b64u length:", dilithiumSecretB64u.length);
+    console.log("Message b64u length:", messageB64u.length);
     console.log("Data preview:", data.substring(0, 100));
-    const signResult = await dilithiumSign(messageB64u, dilithiumSecretB64u);
+    const secretKeyBytes = b64uDecode(dilithiumSecretB64u);
+    console.log("Secret key bytes length:", secretKeyBytes.length);
+    const signResult = await dilithiumSign(messageB64u, secretKeyBytes);
     console.log("Sign result:", signResult);
     if (signResult.error) {
       console.error("Dilithium sign error:", signResult.error);
@@ -635,9 +659,10 @@
   async function verifySignature(data, signature, dilithiumPublicKey) {
     await ensureCryptoReady();
     const messageB64u = b64uEncode(new TextEncoder().encode(data));
-    const verifyResult = await dilithiumVerify(dilithiumPublicKey, messageB64u, signature);
+    const publicKeyBytes = b64uDecode(dilithiumPublicKey);
+    const verifyResult = await dilithiumVerify(messageB64u, signature, publicKeyBytes);
     if (verifyResult.error) return false;
-    return verifyResult.valid === true;
+    return verifyResult.is_valid === true;
   }
   window.VeritasCrypto = {
     encryptDocumentData,

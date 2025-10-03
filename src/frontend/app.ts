@@ -11,7 +11,8 @@ import {
   aesGcmWrap,
   aesGcmUnwrap,
   b64uEncode,
-  b64uDecode
+  b64uDecode,
+  jcsCanonicalize
 } from '@maatara/core-pqc';
 
 // TypeScript declarations for browser environment
@@ -121,6 +122,35 @@ export async function generateClientKeypair(): Promise<{
     
     if (dilithiumResult.error) throw new Error(dilithiumResult.error);
     
+    // Test the Dilithium keys immediately
+    console.log('Testing Dilithium keys...');
+    const testMessage = 'test message for dilithium';
+    const testMessageB64u = b64uEncode(new TextEncoder().encode(testMessage));
+    
+    try {
+      const testSignResult = await (dilithiumSign as any)(testMessageB64u, dilithiumResult.secret_b64u);
+      console.log('Dilithium test sign result:', testSignResult);
+      
+      if (testSignResult.error) {
+        console.error('Dilithium test sign failed:', testSignResult.error);
+        throw new Error('Dilithium key test failed: ' + testSignResult.error);
+      }
+      
+      // Test verification
+      const testVerifyResult = await (dilithiumVerify as any)(testMessageB64u, testSignResult.signature_b64u, dilithiumResult.public_b64u);
+      console.log('Dilithium test verify result:', testVerifyResult);
+      
+      if (testVerifyResult.error || !testVerifyResult.is_valid) {
+        console.error('Dilithium test verify failed:', testVerifyResult);
+        throw new Error('Dilithium key verification test failed');
+      }
+      
+      console.log('✓ Dilithium keys tested successfully');
+    } catch (testError) {
+      console.error('Dilithium key test error:', testError);
+      throw new Error('Generated Dilithium keys are invalid: ' + (testError as Error).message);
+    }
+    
     return {
       kyberPublicKey: kyberResult.public_b64u,
       kyberPrivateKey: kyberResult.secret_b64u,
@@ -138,14 +168,16 @@ export async function generateClientKeypair(): Promise<{
 export async function signData(data: string, dilithiumSecretB64u: string): Promise<string> {
   await ensureCryptoReady();
   
+  // For now, don't use JCS canonicalization - use the data as-is like the README example
   const messageB64u = b64uEncode(new TextEncoder().encode(data));
   
   console.log('Attempting to sign with Dilithium...');
   console.log('Secret key length:', dilithiumSecretB64u.length);
   console.log('Message length:', messageB64u.length);
+  console.log('Data preview:', data.substring(0, 100));
   
   // IMPORTANT: dilithiumSign takes (message, secretKey) - message FIRST!
-  // This is different from the parameter order we used initially
+  // This matches the TypeScript definition and README example
   const signResult = await (dilithiumSign as any)(messageB64u, dilithiumSecretB64u);
   
   console.log('Sign result:', signResult);

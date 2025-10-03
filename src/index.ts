@@ -8,6 +8,7 @@ import { enhancedAssetHandler } from './handlers/web3-assets';
 import { userHandler } from './handlers/users';
 import { stripeHandler } from './handlers/stripe';
 import { searchHandler } from './handlers/search';
+import vdcHandler from './handlers/vdc';
 
 type Bindings = Environment;
 
@@ -1376,6 +1377,7 @@ app.route('/api/users', userHandler);
 app.route('/api/stripe', stripeHandler);
 app.route('/api/search', searchHandler);
 app.route('/api/docs', docsHandler);
+app.route('/api/vdc', vdcHandler);
 
 // HTML template for the SPA
 const appHTML = `

@@ -11,39 +11,85 @@
  *   node initialize-genesis-block.js
  */
 
-const PRODUCTION_URL = 'https://veritas-docs-production.rme-6e5.workers.dev';
+const DEFAULT_PRODUCTION_URL = 'https://veritas-docs-production.rme-6e5.workers.dev';
+
+function parseArg(prefix) {
+  const arg = process.argv.find((value) => value.startsWith(prefix));
+  if (!arg) return undefined;
+  const [, ...parts] = arg.split('=');
+  if (parts.length === 0) return undefined;
+  return parts.join('=');
+}
+
+function resolveBaseUrl() {
+  const cliUrl = parseArg('--url=');
+  const envUrl = process.env.VDC_API_BASE;
+  const baseUrl = cliUrl || envUrl || DEFAULT_PRODUCTION_URL;
+  return baseUrl.replace(/\/$/, '');
+}
+
+function resolveAdminSecret() {
+  const cliSecret = parseArg('--secret=');
+  const envSecret = process.env.ADMIN_SECRET_KEY || process.env.VERITAS_ADMIN_SECRET;
+  const secret = (cliSecret || envSecret || '').trim();
+
+  if (!secret) {
+    console.error('❌ ADMIN SECRET REQUIRED');
+    console.error('   Provide the admin secret via --secret="<value>" or set ADMIN_SECRET_KEY / VERITAS_ADMIN_SECRET environment variable.');
+    process.exit(1);
+  }
+
+  return secret;
+}
 
 async function initializeGenesisBlock() {
   console.log('🎉 Initializing Veritas Documents Chain (VDC) Genesis Block\n');
+
+  const baseUrl = resolveBaseUrl();
+  const adminSecret = resolveAdminSecret();
+  const endpoint = `${baseUrl}/api/vdc/initialize-genesis`;
   
   try {
     console.log('📡 Calling worker to create genesis block...');
-    console.log(`   URL: ${PRODUCTION_URL}/api/vdc/initialize-genesis\n`);
+    console.log(`   URL: ${endpoint}\n`);
     
-    const response = await fetch(`${PRODUCTION_URL}/api/vdc/initialize-genesis`, {
+    const response = await fetch(endpoint, {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/json'
-      }
+        'Content-Type': 'application/json',
+        'X-Admin-Secret': adminSecret
+      },
+      body: JSON.stringify({
+        reason: 'initialize_genesis_block',
+        requestedAt: new Date().toISOString()
+      })
     });
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`HTTP ${response.status}: ${errorText}`);
+    const contentType = response.headers.get('content-type') || '';
+    const isJson = contentType.includes('application/json');
+    const result = isJson ? await response.json() : await response.text();
+
+    if (!response.ok || (isJson && result && result.success === false)) {
+      const errorMessage = isJson
+        ? (result?.error || result?.message || `HTTP ${response.status}`)
+        : `HTTP ${response.status}: ${result}`;
+
+      throw new Error(errorMessage);
     }
 
-    const result = await response.json();
+    const payload = isJson ? result : { data: null };
+    const block = payload?.data?.block || payload?.data || null;
 
-    if (result.success) {
+    if (payload?.success !== false) {
       console.log('✅ GENESIS BLOCK CREATED SUCCESSFULLY!\n');
       console.log('Genesis Block Details:');
       console.log('─────────────────────────────────────────────────────');
-      console.log(`Block Number: ${result.data.blockNumber}`);
-      console.log(`Block Hash: ${result.data.hash}`);
-      console.log(`IPFS Hash: ${result.data.ipfsHash || 'Not uploaded yet'}`);
-      console.log(`Timestamp: ${new Date(result.data.timestamp).toISOString()}`);
-      console.log(`Merkle Root: ${result.data.merkleRoot}`);
-      console.log(`Transactions: ${result.data.transactions.length}`);
+      console.log(`Block Number: ${block?.blockNumber ?? 'unknown'}`);
+      console.log(`Block Hash: ${block?.hash ?? 'unknown'}`);
+      console.log(`IPFS Hash: ${block?.ipfsHash || 'Not uploaded yet'}`);
+      console.log(`Timestamp: ${block?.timestamp ? new Date(block.timestamp).toISOString() : 'n/a'}`);
+      console.log(`Merkle Root: ${block?.merkleRoot ?? 'n/a'}`);
+      console.log(`Transactions: ${Array.isArray(block?.transactions) ? block.transactions.length : 0}`);
       console.log('─────────────────────────────────────────────────────\n');
       
       console.log('📊 Chain Status:');
@@ -57,11 +103,11 @@ async function initializeGenesisBlock() {
       console.log('3. Continue adding transactions and mining blocks\n');
       
       console.log('📝 To check chain status:');
-      console.log(`   curl ${PRODUCTION_URL}/api/vdc/stats\n`);
+      console.log(`   curl ${baseUrl}/api/vdc/stats -H "X-Admin-Secret: <admin-secret>"\n`);
       
     } else {
       console.error('❌ Failed to create genesis block:');
-      console.error(`   Error: ${result.error || result.message}\n`);
+      console.error(`   Error: ${payload?.error || payload?.message || 'Unknown error'}\n`);
       process.exit(1);
     }
     
@@ -72,7 +118,7 @@ async function initializeGenesisBlock() {
     if (error.message.includes('Genesis block already exists')) {
       console.log('ℹ️  Genesis block has already been initialized.');
       console.log('   You can check the chain status with:');
-      console.log(`   curl ${PRODUCTION_URL}/api/vdc/stats\n`);
+      console.log(`   curl ${baseUrl}/api/vdc/stats -H "X-Admin-Secret: <admin-secret>"\n`);
     }
     
     process.exit(1);

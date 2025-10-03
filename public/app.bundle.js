@@ -623,6 +623,7 @@
     console.log("Attempting to sign with Dilithium...");
     console.log("Secret key length:", dilithiumSecretB64u.length);
     console.log("Message length:", messageB64u.length);
+    console.log("Data preview:", data.substring(0, 100));
     const signResult = await dilithiumSign(messageB64u, dilithiumSecretB64u);
     console.log("Sign result:", signResult);
     if (signResult.error) {

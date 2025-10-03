@@ -16,29 +16,45 @@
 
 import { initWasm, kyberKeygen, dilithiumKeygen } from '@maatara/core-pqc';
 import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import crypto from 'crypto';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+function loadWasmBytes() {
+  const wasmPath = path.join(__dirname, 'node_modules', '@maatara', 'core-pqc-wasm', 'core_pqc_wasm_bg.wasm');
+  return fs.readFileSync(wasmPath);
+}
 
 async function generateSystemMasterKeys() {
   console.log('🔐 Veritas Documents Chain (VDC) - System Master Key Generation\n');
   
   // Initialize Maatara WASM
   console.log('📦 Initializing Maatara PQC library...');
-  await initWasm();
+  await initWasm(loadWasmBytes());
   console.log('✅ Maatara initialized\n');
   
   // Generate Dilithium keypair for signing
   console.log('🔑 Generating Dilithium-2 keypair (for signing blocks & transactions)...');
   const dilithiumKeypair = await dilithiumKeygen();
+  const dilithiumPublicKey = dilithiumKeypair.public_b64u;
+  const dilithiumPrivateKey = dilithiumKeypair.secret_b64u;
+  const dilithiumPrivatePart1 = dilithiumPrivateKey.slice(0, Math.ceil(dilithiumPrivateKey.length / 2));
+  const dilithiumPrivatePart2 = dilithiumPrivateKey.slice(Math.ceil(dilithiumPrivateKey.length / 2));
   console.log('✅ Dilithium keypair generated');
-  console.log(`   Public Key Length: ${dilithiumKeypair.publicKey.length} bytes`);
-  console.log(`   Private Key Length: ${dilithiumKeypair.privateKey.length} bytes\n`);
+  console.log(`   Public Key Length: ${dilithiumPublicKey.length} chars`);
+  console.log(`   Private Key Length: ${dilithiumPrivateKey.length} chars\n`);
   
   // Generate Kyber keypair for encryption
   console.log('🔑 Generating Kyber-768 keypair (for encrypting system data)...');
   const kyberKeypair = await kyberKeygen();
+  const kyberPublicKey = kyberKeypair.public_b64u;
+  const kyberPrivateKey = kyberKeypair.secret_b64u;
   console.log('✅ Kyber keypair generated');
-  console.log(`   Public Key Length: ${kyberKeypair.publicKey.length} bytes`);
-  console.log(`   Private Key Length: ${kyberKeypair.privateKey.length} bytes\n`);
+  console.log(`   Public Key Length: ${kyberPublicKey.length} chars`);
+  console.log(`   Private Key Length: ${kyberPrivateKey.length} chars\n`);
   
   // Generate key version ID
   const keyVersion = 1;
@@ -50,13 +66,15 @@ async function generateSystemMasterKeys() {
     keyId,
     generatedAt: new Date().toISOString(),
     dilithium: {
-      publicKey: dilithiumKeypair.publicKey,
-      privateKey: dilithiumKeypair.privateKey,
+      publicKey: dilithiumPublicKey,
+      privateKey: dilithiumPrivateKey,
+      privateKeyPart1: dilithiumPrivatePart1,
+      privateKeyPart2: dilithiumPrivatePart2,
       algorithm: 'Dilithium-2'
     },
     kyber: {
-      publicKey: kyberKeypair.publicKey,
-      privateKey: kyberKeypair.privateKey,
+      publicKey: kyberPublicKey,
+      privateKey: kyberPrivateKey,
       algorithm: 'Kyber-768'
     }
   };
@@ -73,12 +91,14 @@ async function generateSystemMasterKeys() {
 # Key Version: ${keyVersion}
 
 # Dilithium-2 (Signing)
-SYSTEM_DILITHIUM_PUBLIC_KEY="${dilithiumKeypair.publicKey}"
-SYSTEM_DILITHIUM_PRIVATE_KEY="${dilithiumKeypair.privateKey}"
+SYSTEM_DILITHIUM_PUBLIC_KEY="${dilithiumPublicKey}"
+SYSTEM_DILITHIUM_PRIVATE_KEY="${dilithiumPrivateKey}"
+SYSTEM_DILITHIUM_PRIVATE_KEY_PART1="${dilithiumPrivatePart1}"
+SYSTEM_DILITHIUM_PRIVATE_KEY_PART2="${dilithiumPrivatePart2}"
 
 # Kyber-768 (Encryption)
-SYSTEM_KYBER_PUBLIC_KEY="${kyberKeypair.publicKey}"
-SYSTEM_KYBER_PRIVATE_KEY="${kyberKeypair.privateKey}"
+SYSTEM_KYBER_PUBLIC_KEY="${kyberPublicKey}"
+SYSTEM_KYBER_PRIVATE_KEY="${kyberPrivateKey}"
 
 # Key Metadata
 SYSTEM_KEY_VERSION="${keyVersion}"
@@ -94,11 +114,18 @@ SYSTEM_KEY_ID="${keyId}"
 
 # Dilithium Private Key (for signing blocks and transactions)
 wrangler secret put SYSTEM_DILITHIUM_PRIVATE_KEY --env production
-# When prompted, paste: ${dilithiumKeypair.privateKey}
+# When prompted, paste: ${dilithiumPrivateKey}
+
+# Dilithium Private Key Parts (Cloudflare secret limit workaround)
+wrangler secret put SYSTEM_DILITHIUM_PRIVATE_KEY_PART1 --env production
+# When prompted, paste: ${dilithiumPrivatePart1}
+
+wrangler secret put SYSTEM_DILITHIUM_PRIVATE_KEY_PART2 --env production
+# When prompted, paste: ${dilithiumPrivatePart2}
 
 # Kyber Private Key (for encrypting system data)
 wrangler secret put SYSTEM_KYBER_PRIVATE_KEY --env production
-# When prompted, paste: ${kyberKeypair.privateKey}
+# When prompted, paste: ${kyberPrivateKey}
 
 # Key Version
 wrangler secret put SYSTEM_KEY_VERSION --env production
@@ -123,12 +150,18 @@ wrangler secret list --env production
     'Write-Host "Setting up Veritas Documents Chain (VDC) System Master Keys..." -ForegroundColor Cyan',
     '',
     '# Dilithium Private Key',
-    'Write-Host "Setting SYSTEM_DILITHIUM_PRIVATE_KEY..." -ForegroundColor Yellow',
-    `"${dilithiumKeypair.privateKey}" | wrangler secret put SYSTEM_DILITHIUM_PRIVATE_KEY --env production`,
+  'Write-Host "Setting SYSTEM_DILITHIUM_PRIVATE_KEY..." -ForegroundColor Yellow',
+  `"${dilithiumPrivateKey}" | wrangler secret put SYSTEM_DILITHIUM_PRIVATE_KEY --env production`,
+  '',
+  'Write-Host "Setting SYSTEM_DILITHIUM_PRIVATE_KEY_PART1..." -ForegroundColor Yellow',
+  `"${dilithiumPrivatePart1}" | wrangler secret put SYSTEM_DILITHIUM_PRIVATE_KEY_PART1 --env production`,
+  '',
+  'Write-Host "Setting SYSTEM_DILITHIUM_PRIVATE_KEY_PART2..." -ForegroundColor Yellow',
+  `"${dilithiumPrivatePart2}" | wrangler secret put SYSTEM_DILITHIUM_PRIVATE_KEY_PART2 --env production`,
     '',
     '# Kyber Private Key',
-    'Write-Host "Setting SYSTEM_KYBER_PRIVATE_KEY..." -ForegroundColor Yellow',
-    `"${kyberKeypair.privateKey}" | wrangler secret put SYSTEM_KYBER_PRIVATE_KEY --env production`,
+  'Write-Host "Setting SYSTEM_KYBER_PRIVATE_KEY..." -ForegroundColor Yellow',
+  `"${kyberPrivateKey}" | wrangler secret put SYSTEM_KYBER_PRIVATE_KEY --env production`,
     '',
     '# Key Version',
     'Write-Host "Setting SYSTEM_KEY_VERSION..." -ForegroundColor Yellow',
@@ -139,12 +172,12 @@ wrangler secret list --env production
     `"${keyId}" | wrangler secret put SYSTEM_KEY_ID --env production`,
     '',
     '# Dilithium Public Key',
-    'Write-Host "Setting SYSTEM_DILITHIUM_PUBLIC_KEY..." -ForegroundColor Yellow',
-    `"${dilithiumKeypair.publicKey}" | wrangler secret put SYSTEM_DILITHIUM_PUBLIC_KEY --env production`,
+  'Write-Host "Setting SYSTEM_DILITHIUM_PUBLIC_KEY..." -ForegroundColor Yellow',
+  `"${dilithiumPublicKey}" | wrangler secret put SYSTEM_DILITHIUM_PUBLIC_KEY --env production`,
     '',
     '# Kyber Public Key',
-    'Write-Host "Setting SYSTEM_KYBER_PUBLIC_KEY..." -ForegroundColor Yellow',
-    `"${kyberKeypair.publicKey}" | wrangler secret put SYSTEM_KYBER_PUBLIC_KEY --env production`,
+  'Write-Host "Setting SYSTEM_KYBER_PUBLIC_KEY..." -ForegroundColor Yellow',
+  `"${kyberPublicKey}" | wrangler secret put SYSTEM_KYBER_PUBLIC_KEY --env production`,
     '',
     'Write-Host "All secrets configured!" -ForegroundColor Green',
     'Write-Host "Verifying secrets..." -ForegroundColor Cyan',
@@ -160,11 +193,11 @@ wrangler secret list --env production
     keyId,
     generatedAt: new Date().toISOString(),
     dilithium: {
-      publicKey: dilithiumKeypair.publicKey,
+      publicKey: dilithiumPublicKey,
       algorithm: 'Dilithium-2'
     },
     kyber: {
-      publicKey: kyberKeypair.publicKey,
+      publicKey: kyberPublicKey,
       algorithm: 'Kyber-768'
     }
   };
@@ -188,10 +221,10 @@ export const VDC_SYSTEM_KEYS = {
   KEY_ID: '${keyId}',
   
   // Dilithium-2 Public Key (for verifying signatures)
-  DILITHIUM_PUBLIC_KEY: '${dilithiumKeypair.publicKey}',
+  DILITHIUM_PUBLIC_KEY: '${dilithiumPublicKey}',
   
   // Kyber-768 Public Key (for encryption)
-  KYBER_PUBLIC_KEY: '${kyberKeypair.publicKey}',
+  KYBER_PUBLIC_KEY: '${kyberPublicKey}',
   
   GENERATED_AT: '${new Date().toISOString()}'
 } as const;

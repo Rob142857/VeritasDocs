@@ -12,6 +12,22 @@ import { Environment } from '../types';
 import { IPFSClient, createIPFSRecord } from './ipfs';
 import { MaataraClient } from './crypto';
 
+function getSystemDilithiumPrivateKey(env: Environment): string {
+  if (env.SYSTEM_DILITHIUM_PRIVATE_KEY && env.SYSTEM_DILITHIUM_PRIVATE_KEY.length > 0) {
+    return env.SYSTEM_DILITHIUM_PRIVATE_KEY;
+  }
+
+  const part1 = env.SYSTEM_DILITHIUM_PRIVATE_KEY_PART1 || '';
+  const part2 = env.SYSTEM_DILITHIUM_PRIVATE_KEY_PART2 || '';
+  const combined = part1 + part2;
+
+  if (!combined) {
+    throw new Error('System Dilithium private key not configured');
+  }
+
+  return combined;
+}
+
 /**
  * VDC Transaction with Dual Signatures
  */
@@ -163,16 +179,57 @@ export class VDCBlockchain {
       }
     };
 
-    const timestamp = Date.now();
+    const systemPrivateKey = getSystemDilithiumPrivateKey(this.env);
+    const blockTimestamp = Date.now();
+
+    const genesisTransaction: VDCTransaction = {
+      id: `vdc_genesis_${blockTimestamp}`,
+      type: 'admin_action',
+      timestamp: blockTimestamp,
+      data: {
+        action: 'initialize_chain',
+        description: 'Genesis block initialization by system master key',
+        initiatedBy: 'system',
+        metadata: genesisData
+      },
+      signatures: {
+        user: {
+          publicKey: systemDilithiumPublicKey,
+          signature: ''
+        },
+        system: {
+          publicKey: systemDilithiumPublicKey,
+          signature: '',
+          keyVersion: systemKeyVersion
+        }
+      }
+    };
+
+    const genesisTxPayload = {
+      id: genesisTransaction.id,
+      type: genesisTransaction.type,
+      timestamp: genesisTransaction.timestamp,
+      data: genesisTransaction.data
+    };
+
+    const genesisSignature = await this.maataraClient.signData(
+      JSON.stringify(genesisTxPayload),
+      systemPrivateKey
+    );
+
+    genesisTransaction.signatures.user.signature = genesisSignature;
+    genesisTransaction.signatures.system.signature = genesisSignature;
+
+    const transactions = [genesisTransaction];
 
     // Create genesis block
     const genesisBlock: VDCBlock = {
       blockNumber: 0,
-      timestamp,
+      timestamp: blockTimestamp,
       previousHash: '0',
       hash: '',
-      transactions: [],
-      merkleRoot: this.calculateMerkleRoot([]),
+      transactions,
+      merkleRoot: this.calculateMerkleRoot(transactions),
       blockSignature: {
         publicKey: systemDilithiumPublicKey,
         signature: '',
@@ -186,16 +243,16 @@ export class VDCBlockchain {
     // Sign genesis block with system master key
     const blockDataToSign = {
       blockNumber: 0,
-      timestamp,
+      timestamp: blockTimestamp,
       previousHash: '0',
       hash: genesisBlock.hash,
       merkleRoot: genesisBlock.merkleRoot,
-      genesisData
+      transactionCount: genesisBlock.transactions.length
     };
 
     genesisBlock.blockSignature.signature = await this.maataraClient.signData(
       JSON.stringify(blockDataToSign),
-      this.env.SYSTEM_DILITHIUM_PRIVATE_KEY
+      systemPrivateKey
     );
 
     // Upload to IPFS
@@ -209,15 +266,23 @@ export class VDCBlockchain {
       blockNumber: 0,
       hash: genesisBlock.hash,
       ipfsHash: genesisBlock.ipfsHash,
-      timestamp
+      timestamp: blockTimestamp
     }));
     await this.env.VERITAS_KV.put('vdc:genesis', JSON.stringify(genesisData));
+    await this.env.VERITAS_KV.put(`vdc:tx:${genesisTransaction.id}`, JSON.stringify({
+      blockNumber: 0,
+      txId: genesisTransaction.id,
+      type: genesisTransaction.type,
+      timestamp: genesisTransaction.timestamp
+    }));
+    await this.env.VERITAS_KV.put('vdc:pending:count', '0');
 
     this.genesisBlock = genesisBlock;
 
     console.log('🎉 VDC: Genesis block created!');
     console.log(`   Block Hash: ${genesisBlock.hash}`);
     console.log(`   IPFS Hash: ${genesisBlock.ipfsHash}`);
+    console.log(`   Genesis TX: ${genesisTransaction.id}`);
 
     return genesisBlock;
   }
@@ -251,7 +316,7 @@ export class VDCBlockchain {
     // SYSTEM SIGNATURE: System validates and signs the transaction
     const systemKeyVersion = parseInt(this.env.SYSTEM_KEY_VERSION || '1');
     const systemPublicKey = this.env.SYSTEM_DILITHIUM_PUBLIC_KEY;
-    const systemPrivateKey = this.env.SYSTEM_DILITHIUM_PRIVATE_KEY;
+    const systemPrivateKey = getSystemDilithiumPrivateKey(this.env);
 
     if (!systemPrivateKey || !systemPublicKey) {
       throw new Error('System master keys not configured in environment');
@@ -278,22 +343,85 @@ export class VDCBlockchain {
       }
     };
 
-    // Store in pending pool
-    await this.env.VERITAS_KV.put(
-      `vdc:pending:${txId}`,
-      JSON.stringify(transaction)
-    );
-
-    // Increment pending count
-    const countStr = await this.env.VERITAS_KV.get('vdc:pending:count') || '0';
-    const count = parseInt(countStr) + 1;
-    await this.env.VERITAS_KV.put('vdc:pending:count', count.toString());
+    const pendingCount = await this.storePendingTransaction(transaction);
 
     console.log(`✅ VDC: Transaction ${txId} added to pending pool`);
     console.log(`   Type: ${type}`);
-    console.log(`   Pending count: ${count}`);
+    console.log(`   Pending count: ${pendingCount}`);
 
     return txId;
+  }
+
+  async addAdminAction(
+    action: string,
+    payload: Record<string, any> = {}
+  ): Promise<{ transaction: VDCTransaction; pendingCount: number }> {
+    if (!action) {
+      throw new Error('Admin action name is required');
+    }
+
+    const systemPublicKey = this.env.SYSTEM_DILITHIUM_PUBLIC_KEY;
+    if (!systemPublicKey) {
+      throw new Error('System Dilithium public key not configured');
+    }
+
+    const systemPrivateKey = getSystemDilithiumPrivateKey(this.env);
+    const systemKeyVersion = parseInt(this.env.SYSTEM_KEY_VERSION || '1');
+    const timestamp = Date.now();
+    const txId = `vdc_admin_${timestamp}_${Math.random().toString(36).substr(2, 6)}`;
+
+    const txData: Omit<VDCTransaction, 'signatures'> = {
+      id: txId,
+      type: 'admin_action',
+      timestamp,
+      data: {
+        action,
+        payload,
+        initiatedBy: 'system',
+        keyVersion: systemKeyVersion
+      }
+    };
+
+    const signature = await this.maataraClient.signData(
+      JSON.stringify(txData),
+      systemPrivateKey
+    );
+
+    const transaction: VDCTransaction = {
+      ...txData,
+      signatures: {
+        user: {
+          publicKey: systemPublicKey,
+          signature
+        },
+        system: {
+          publicKey: systemPublicKey,
+          signature,
+          keyVersion: systemKeyVersion
+        }
+      }
+    };
+
+    const pendingCount = await this.storePendingTransaction(transaction);
+
+    console.log(`✅ VDC: Admin action ${action} queued (tx: ${txId})`);
+    console.log(`   Pending count: ${pendingCount}`);
+
+    return { transaction, pendingCount };
+  }
+
+  private async storePendingTransaction(transaction: VDCTransaction): Promise<number> {
+    await this.env.VERITAS_KV.put(
+      `vdc:pending:${transaction.id}`,
+      JSON.stringify(transaction)
+    );
+
+    const currentCountStr = await this.env.VERITAS_KV.get('vdc:pending:count');
+    const currentCount = parseInt(currentCountStr || '0', 10);
+    const pendingCount = Number.isNaN(currentCount) ? 1 : currentCount + 1;
+    await this.env.VERITAS_KV.put('vdc:pending:count', pendingCount.toString());
+
+    return pendingCount;
   }
 
   /**
@@ -355,10 +483,10 @@ export class VDCBlockchain {
       transactionCount: transactions.length
     };
 
-    block.blockSignature.signature = await this.maataraClient.signData(
-      JSON.stringify(blockDataToSign),
-      this.env.SYSTEM_DILITHIUM_PRIVATE_KEY
-    );
+        block.blockSignature.signature = await this.maataraClient.signData(
+          JSON.stringify(blockDataToSign),
+          getSystemDilithiumPrivateKey(this.env)
+        );
 
     // Upload to IPFS
     const blockJson = JSON.stringify(block, null, 2);

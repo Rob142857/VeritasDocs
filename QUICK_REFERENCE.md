@@ -22,6 +22,8 @@ npm run build
 Main App:     http://127.0.0.1:8787/
 Web3 Demo:    http://127.0.0.1:8787/demo
 Health Check: http://127.0.0.1:8787/health
+VDC Stats:    http://127.0.0.1:8787/api/vdc/stats
+VDC Blocks:   http://127.0.0.1:8787/api/vdc/blocks/{blockNumber}
 ```
 
 ---
@@ -72,6 +74,24 @@ POST /api/web3-assets/web3/{assetId}/decrypt
 GET /api/search?q=term&type=will&limit=10
 ```
 
+### VDC Blockchain Admin
+```bash
+# Initialize Genesis Block (requires admin secret)
+curl -X POST http://127.0.0.1:8787/api/vdc/initialize-genesis \
+  -H "Content-Type: application/json" \
+  -H "X-Admin-Secret: <admin-secret>"
+
+# Queue Admin Action
+curl -X POST http://127.0.0.1:8787/api/vdc/admin/actions \
+  -H "Content-Type: application/json" \
+  -H "X-Admin-Secret: <admin-secret>" \
+  -d '{"action":"anchor_merkle_root","payload":{"root":"0xabc"}}'
+
+# Mine Pending Transactions
+curl -X POST http://127.0.0.1:8787/api/vdc/mine \
+  -H "X-Admin-Secret: <admin-secret>"
+```
+
 ---
 
 ## 🔧 CONFIGURATION
@@ -84,6 +104,13 @@ ETHEREUM_PRIVATE_KEY=0x...
 IPFS_API_KEY=...
 VERITAS_CONTRACT_ADDRESS=0x...
 ADMIN_SECRET_KEY=...
+SYSTEM_DILITHIUM_PUBLIC_KEY=...
+SYSTEM_DILITHIUM_PRIVATE_KEY_PART1=...
+SYSTEM_DILITHIUM_PRIVATE_KEY_PART2=...
+SYSTEM_KYBER_PUBLIC_KEY=...
+SYSTEM_KYBER_PRIVATE_KEY=...
+SYSTEM_KEY_VERSION=...
+SYSTEM_KEY_ID=...
 
 # Optional
 PINATA_API_KEY=...
@@ -295,6 +322,7 @@ npm run dev
 - [ ] Stripe webhooks configured
 - [ ] Error monitoring set up
 - [ ] Performance monitoring configured
+- [ ] Genesis block initialized (run `node initialize-genesis-block.js --secret=<admin-secret>` once per environment)
 
 ### Deployment Commands
 ```bash

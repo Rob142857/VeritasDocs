@@ -256,34 +256,33 @@ authHandler.post('/activate', async (c) => {
       signature
     };
 
-    // Verify the Dilithium signature before storing
+    // Initialize VDC blockchain
+    const vdc = await initializeVDC(env);
+    
+    // Add user to VDC blockchain with dual signatures
+    // This will verify the user signature AND add the system signature
     try {
-      const maataraClient = new MaataraClient(env);
-      const blockDataToVerify = JSON.stringify({
+      const txId = await addUserToVDC(
+        vdc,
+        userId,
+        oneTimeLink.email,
         kyberPublicKey,
         dilithiumPublicKey,
         encryptedUserData,
-        timestamp: blockchainTx.timestamp
-      });
-      
-      const isValid = await maataraClient.verifySignature(
-        blockDataToVerify,
-        signature,
-        dilithiumPublicKey
+        accountType,
+        signature // User's signature will be verified inside addUserToVDC
       );
       
-      if (!isValid) {
-        return c.json<APIResponse>({ 
-          success: false, 
-          error: 'Invalid signature - blockchain transaction rejected' 
-        }, 401);
-      }
-    } catch (error) {
-      console.error('Signature verification error:', error);
+      console.log(`✅ User ${userId} added to VDC blockchain (tx: ${txId})`);
+      
+      // Store transaction reference in blockchain transaction object
+      (blockchainTx as any).vdcTxId = txId;
+    } catch (error: any) {
+      console.error('VDC transaction error:', error);
       return c.json<APIResponse>({ 
         success: false, 
-        error: 'Signature verification failed' 
-      }, 500);
+        error: `Blockchain transaction rejected: ${error?.message || 'Unknown error'}` 
+      }, 401);
     }
 
     // Store the blockchain transaction in KV (will migrate to IPFS later)

@@ -1,6 +1,24 @@
 # Veritas Documents Blockchain Architecture
 
-## Architecture Decision: Single Master Chain vs Per-User Chains
+**Version**: 1.0.1  
+**Last Updated**: January 3, 2025  
+**Status**: Production
+
+---
+
+## 📋 Table of Contents
+
+1. [Architecture Decision: Single Master Chain](#architecture-decision-single-master-chain-vs-per-user-chains)
+2. [VDC Blockchain Implementation](#vdc-blockchain-implementation)
+3. [Transaction Types](#transaction-types)
+4. [Dual Signature System](#dual-signature-system)
+5. [Block Structure](#block-structure)
+6. [IPFS Integration](#ipfs-integration)
+7. [Verification & Security](#verification--security)
+
+---
+
+## 🏗️ Architecture Decision: Single Master Chain vs Per-User Chains
 
 ### ✅ RECOMMENDED: Single Master Chain (Your Design)
 
@@ -751,3 +769,19 @@ async function verifyChain(): Promise<boolean> {
 8. **Implement verification** (validate entire chain)
 
 This is the **correct architecture** for your legal document platform! 🎉
+
+---
+
+## 📚 Related Documentation
+
+- [**ZERO_KNOWLEDGE_ARCHITECTURE.md**](./ZERO_KNOWLEDGE_ARCHITECTURE.md) - Zero-knowledge security model & machine identities
+- [**SECURITY_ARCHITECTURE.md**](./SECURITY_ARCHITECTURE.md) - Comprehensive security design
+- [**VDC_INTEGRATION_GUIDE.md**](./VDC_INTEGRATION_GUIDE.md) - Developer guide for VDC blockchain
+- [**TECHNICAL_STATUS.md**](./TECHNICAL_STATUS.md) - Current implementation status
+
+---
+
+**Version**: 1.0.1  
+**Last Updated**: January 3, 2025  
+**Status**: Production Ready  
+**Deployment**: https://veritas-docs-production.rme-6e5.workers.dev

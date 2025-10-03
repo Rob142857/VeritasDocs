@@ -277,6 +277,10 @@ authHandler.post('/activate', async (c) => {
       
       // Store transaction reference in blockchain transaction object
       (blockchainTx as any).vdcTxId = txId;
+      
+      // CRITICAL: Store VDC transaction ID mapping for login lookup
+      await env.VERITAS_KV.put(`vdc:user:${userId}`, txId);
+      console.log(`✅ Stored VDC transaction mapping: vdc:user:${userId} -> ${txId}`);
     } catch (error: any) {
       console.error('VDC transaction error:', error);
       return c.json<APIResponse>({ 
@@ -361,22 +365,26 @@ authHandler.post('/login', async (c) => {
     // THE KEY VERIFICATION: Try to decrypt the encrypted user data with the provided Kyber private key
     // If decryption succeeds, the user has the correct private key (zero-knowledge proof!)
     
-    // Look up the user's VDC blockchain transaction
+    // Look up the user's VDC blockchain transaction ID (stored during activation)
     const vdcTxId = await env.VERITAS_KV.get(`vdc:user:${userId}`);
     if (!vdcTxId) {
+      console.error(`VDC transaction not found for user ${userId}`);
       return c.json<APIResponse>({ success: false, error: 'User blockchain registration not found' }, 500);
     }
 
+    // Get the VDC transaction from KV
     const vdcTxData = await env.VERITAS_KV.get(`vdc:tx:${vdcTxId}`);
     if (!vdcTxData) {
-      return c.json<APIResponse>({ success: false, error: 'Blockchain transaction not found' }, 500);
+      console.error(`VDC transaction data not found: ${vdcTxId}`);
+      return c.json<APIResponse>({ success: false, error: 'Blockchain transaction data not found' }, 500);
     }
 
     const vdcTx = JSON.parse(vdcTxData);
 
-    // Extract the encrypted user data from the transaction payload
-    const encryptedUserData = vdcTx.payload?.encryptedUserData;
+    // Extract the encrypted user data from the transaction payload (data field for user_registration type)
+    const encryptedUserData = vdcTx.data?.encryptedUserData;
     if (!encryptedUserData) {
+      console.error(`Encrypted user data not found in VDC transaction ${vdcTxId}`);
       return c.json<APIResponse>({ success: false, error: 'Encrypted user data not found in blockchain' }, 500);
     }
 

@@ -507,7 +507,7 @@ class VeritasApp {
 
         // Download keys functionality
         document.getElementById('download-keys').addEventListener('click', () => {
-          this.downloadPrivateKeys(userEmail, keypairs, result.data.recoveryPhrase, result.data.userId);
+          this.downloadPrivateKeys(userEmail, keypairs, result.data.recoveryPhrase, result.data.user.id);
         });
 
         document.getElementById('continue-login').addEventListener('click', () => {

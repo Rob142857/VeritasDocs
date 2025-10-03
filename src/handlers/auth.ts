@@ -358,80 +358,65 @@ authHandler.post('/login', async (c) => {
 
     const user: User = JSON.parse(userData);
 
-    // Get blockchain transaction
-    const storedData = JSON.parse(user.encryptedPrivateData);
-    const blockchainTxId = storedData.blockchainTxId;
+    // THE KEY VERIFICATION: Try to decrypt the encrypted user data with the provided Kyber private key
+    // If decryption succeeds, the user has the correct private key (zero-knowledge proof!)
     
-    if (!blockchainTxId) {
-      // Legacy user without blockchain tx - try old verification methods
-      try {
-        if (typeof storedData === 'string' && storedData.startsWith('prod-encrypted-data-')) {
-          const expectedPrivateKey = storedData.replace('prod-encrypted-data-', '');
-          if (privateKey !== expectedPrivateKey) {
-            return c.json<APIResponse>({ success: false, error: 'Invalid private key' }, 401);
-          }
-        } else {
-          const maataraClient = new MaataraClient(env);
-          await maataraClient.decryptData(user.encryptedPrivateData, privateKey);
-        }
-      } catch (error) {
-        console.error('Legacy private key verification failed:', error);
-        return c.json<APIResponse>({ success: false, error: 'Invalid private key' }, 401);
-      }
-      
-      return c.json<APIResponse>({
-        success: true,
-        data: { 
-          user,
-          accountType: user.accountType // Include account type for UI
-        },
-        message: 'Login successful (legacy user)',
-      });
+    // Look up the user's VDC blockchain transaction
+    const vdcTxId = await env.VERITAS_KV.get(`vdc:user:${userId}`);
+    if (!vdcTxId) {
+      return c.json<APIResponse>({ success: false, error: 'User blockchain registration not found' }, 500);
     }
 
-    // New blockchain-based verification
-    const txData = await env.VERITAS_KV.get(`blockchain:tx:${blockchainTxId}`);
-    if (!txData) {
+    const vdcTxData = await env.VERITAS_KV.get(`vdc:tx:${vdcTxId}`);
+    if (!vdcTxData) {
       return c.json<APIResponse>({ success: false, error: 'Blockchain transaction not found' }, 500);
     }
 
-    const blockchainTx = JSON.parse(txData);
+    const vdcTx = JSON.parse(vdcTxData);
 
-    // THE KEY VERIFICATION: Try to decrypt the encrypted user data with the provided private key
-    // If decryption succeeds, the user has the correct private key
+    // Extract the encrypted user data from the transaction payload
+    const encryptedUserData = vdcTx.payload?.encryptedUserData;
+    if (!encryptedUserData) {
+      return c.json<APIResponse>({ success: false, error: 'Encrypted user data not found in blockchain' }, 500);
+    }
+
+    // Attempt to decrypt with the provided private key
     try {
       const maataraClient = new MaataraClient(env);
       const decryptedData = await maataraClient.decryptData(
-        blockchainTx.encryptedUserData,
+        encryptedUserData,
         privateKey
       );
       
-      // Parse decrypted data to verify it's valid
+      // Parse decrypted data to verify it's valid JSON
       const parsedData = JSON.parse(decryptedData);
       
       // Verify the email matches (additional security check)
       if (parsedData.email !== email) {
-        return c.json<APIResponse>({ success: false, error: 'Email mismatch' }, 401);
+        console.error('Email mismatch:', { expected: email, got: parsedData.email });
+        return c.json<APIResponse>({ success: false, error: 'Email mismatch - invalid credentials' }, 401);
       }
       
-      // Login successful! User proved they have the private key by decrypting their data
+      // Login successful! User proved they have the correct Kyber private key by decrypting their data
+      console.log(`✅ Login successful for user ${userId} (${email})`);
+      
       return c.json<APIResponse>({
         success: true,
         data: {
           user,
-          blockchainTx, // Include blockchain transaction for client verification
-          accountType: user.accountType, // Critical for UI permissions
-          decryptedUserData: parsedData // Return decrypted data to client
+          vdcTransactionId: vdcTxId,
+          accountType: user.accountType,
+          decryptedUserData: parsedData // Return decrypted personal data to client
         },
-        message: 'Login successful - blockchain verified',
+        message: 'Login successful - zero-knowledge proof verified',
       });
       
     } catch (error) {
       console.error('Decryption verification failed:', error);
-      // If decryption fails, the private key is incorrect
+      // If decryption fails, the Kyber private key is incorrect
       return c.json<APIResponse>({ 
         success: false, 
-        error: 'Invalid private key - decryption failed' 
+        error: 'Invalid private key - could not decrypt your data' 
       }, 401);
     }
   } catch (error) {

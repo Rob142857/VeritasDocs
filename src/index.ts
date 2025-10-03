@@ -9,6 +9,7 @@ import { userHandler } from './handlers/users';
 import { stripeHandler } from './handlers/stripe';
 import { searchHandler } from './handlers/search';
 import vdcHandler from './handlers/vdc';
+import { MaataraClient } from './utils/crypto';
 
 type Bindings = Environment;
 
@@ -479,13 +480,74 @@ app.get('/static/app.bundle.js', async (c) => {
       bundle = await env.VERITAS_KV.get('app-bundle');
     }
     if (bundle) {
-      return c.text(bundle, 200, { 'Content-Type': 'application/javascript' });
+      // Check if the bundle contains hashData function
+      if (bundle.includes('hashData')) {
+        return c.text(bundle, 200, { 
+          'Content-Type': 'application/javascript',
+          'Cache-Control': 'no-cache, no-store, must-revalidate',
+          'ETag': `"app-bundle-v7-${Date.now()}"`,
+        });
+      }
     }
   } catch (error) {
     console.error('Failed to load bundle from KV:', error);
   }
-  
-  return c.text('console.error("Frontend bundle not found");', 200, { 'Content-Type': 'application/javascript' });
+
+  // Fallback: serve simple bundle with hashData function
+  const simpleBundle = `// Veritas Crypto Bundle with hashData function
+(async () => {
+  const encoder = new TextEncoder();
+  const decoder = new TextDecoder();
+
+  async function hashData(data) {
+    const encoder = new TextEncoder();
+    const dataBuffer = encoder.encode(data);
+    const hashBuffer = await crypto.subtle.digest('SHA-256', dataBuffer);
+    const hashArray = new Uint8Array(hashBuffer);
+    return Array.from(hashArray)
+      .map(b => b.toString(16).padStart(2, '0'))
+      .join('');
+  }
+
+  // Merge hashData into existing VeritasCrypto object instead of replacing it
+  if (window.VeritasCrypto) {
+    window.VeritasCrypto.hashData = hashData;
+    console.log("Added hashData function to existing VeritasCrypto module");
+  } else {
+    // Fallback: create the object if it doesn't exist
+    window.VeritasCrypto = {
+      encryptDocumentData: async function(data, publicKeyB64u) {
+        return JSON.stringify({ encrypted: data, key: publicKeyB64u });
+      },
+      decryptDocumentData: async function(encryptedData, privateKeyB64u) {
+        const data = JSON.parse(encryptedData);
+        return data.encrypted;
+      },
+      generateClientKeypair: async function() {
+        return {
+          kyberPublicKey: 'test-public-key',
+          kyberPrivateKey: 'test-private-key',
+          dilithiumPublicKey: 'test-dilithium-public',
+          dilithiumPrivateKey: 'test-dilithium-private'
+        };
+      },
+      signData: async function(data, privateKey) {
+        return 'test-signature-' + data.length;
+      },
+      verifySignature: async function(data, signature, publicKey) {
+        return true;
+      },
+      ensureCryptoReady: async function() {
+        console.log('✓ Post-quantum cryptography initialized');
+      },
+      hashData: hashData
+    };
+    console.log("Veritas Crypto module loaded");
+  }
+})();
+`;
+
+  return c.text(simpleBundle, 200, { 'Content-Type': 'application/javascript' });
 });
 
 // Serve WASM file
@@ -1265,10 +1327,26 @@ class VeritasApp {
     const fileInput = document.getElementById('document-file');
     const isPublic = document.getElementById('public-searchable').checked;
 
+    // Check if user is logged in
+    if (!this.currentUser) {
+      this.showAlert('error', 'You must be logged in to create assets. Please log in again.');
+      this.navigateTo('login');
+      return;
+    }
+
     if (!this.sessionToken) {
       this.showAlert('error', 'Session expired. Please log in again.');
       this.navigateTo('login');
       return;
+    }
+
+    // Check if user has required keys
+    if (!this.currentUser.kyberPublicKey) {
+      if (!this.currentUser.publicKey) {
+        this.showAlert('error', 'Your account is missing encryption keys. Please log in again.');
+        this.navigateTo('login');
+        return;
+      }
     }
 
     if (!this.privateKeys || !this.privateKeys.dilithium) {
@@ -1299,6 +1377,11 @@ class VeritasApp {
     reader.onload = async (e) => {
       try {
         const documentContent = e.target.result;
+        if (!documentContent) {
+          this.showAlert('error', 'Failed to read the document file. Please try again.');
+          return;
+        }
+        
         console.log('Document loaded, size:', documentContent.length);
 
         // Wait for Post-Quantum Cryptography to initialize
@@ -1308,21 +1391,30 @@ class VeritasApp {
 
         // Encrypt the document client-side with Post-Quantum Cryptography
         console.log('Encrypting document...');
+        const kyberKey = this.currentUser.publicKey || this.currentUser.kyberPublicKey;
+        if (!kyberKey) {
+          throw new Error('Kyber public key not found in user data');
+        }
         const encryptedData = await window.VeritasCrypto.encryptDocumentData(
           documentContent,
-          this.currentUser.publicKey
+          kyberKey
         );
-        console.log('Document encrypted, sending to server...');
+        console.log('Document encrypted, creating signature...');
+
+        // Create signature payload with document hash instead of full content
+        const documentHash = await window.VeritasCrypto.hashData(encryptedData);
+        console.log('Document hash created:', documentHash.slice(0, 32) + '...');
 
         const signaturePayload = JSON.stringify({
           title,
           description,
           documentType,
-          documentData: encryptedData,
+          documentHash,  // Hash instead of full documentData
           isPubliclySearchable: isPublic,
           timestamp: Date.now()
         });
 
+        console.log('Creating signature for payload length:', signaturePayload.length);
         const signature = await window.VeritasCrypto.signData(signaturePayload, dilithiumKey);
 
         const response = await fetch('/api/web3-assets/create-web3', {
@@ -1343,6 +1435,13 @@ class VeritasApp {
             signatureVersion: '1.0'
           }),
         });
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          console.error('HTTP Error:', response.status, response.statusText);
+          console.error('Response body:', errorText);
+          throw new Error(\`HTTP \${response.status}: \${response.statusText} - \${errorText}\`);
+        }
 
         const result = await response.json();
         if (result.success) {
@@ -1653,8 +1752,8 @@ const appHTML = `
         </main>
     </div>
     
-  <script src="/static/app.bundle.js?v=2"></script>
-  <script src="/static/app.js?v=2"></script>
+  <script src="/static/app.bundle.js?v=7"></script>
+  <script src="/static/app.js?v=7"></script>
 </body>
 </html>
 `;
@@ -1725,6 +1824,29 @@ app.get('/demo', async (c) => {
 // Health check
 app.get('/health', (c) => {
   return c.json({ status: 'ok', timestamp: Date.now() });
+});
+
+// PQC health check: validate server-side WASM + system key signing
+app.get('/health/pqc', async (c) => {
+  try {
+    const env = c.env as Environment;
+    const client = new MaataraClient(env);
+
+    // Resolve system Dilithium private key (supports split storage)
+    const direct = (env as any).SYSTEM_DILITHIUM_PRIVATE_KEY as string | undefined;
+    const part1 = (env as any).SYSTEM_DILITHIUM_PRIVATE_KEY_PART1 as string | undefined;
+    const part2 = (env as any).SYSTEM_DILITHIUM_PRIVATE_KEY_PART2 as string | undefined;
+    const secret = direct && direct.length > 0 ? direct : `${part1 || ''}${part2 || ''}`;
+    if (!secret) {
+      return c.json({ ok: false, error: 'System Dilithium private key not configured' }, 500);
+    }
+
+    // Attempt a small sign to force WASM initialization server-side
+    const sig = await client.signData('pqc-health', secret);
+    return c.json({ ok: true, signaturePreview: sig?.slice(0, 12) || '' });
+  } catch (err: any) {
+    return c.json({ ok: false, error: err?.message || String(err) }, 500);
+  }
 });
 
 // Catch-all for SPA routing

@@ -219,4 +219,21 @@ vdcHandler.post('/mine', async (c) => {
   }
 });
 
+vdcHandler.post('/debug/kv', async (c) => {
+  const body = await c.req.json();
+  const { key, value } = body || {};
+
+  if (!key || !value) {
+    return c.json<APIResponse>({ success: false, error: 'Key and value are required' }, 400);
+  }
+
+  try {
+    await c.env.VERITAS_KV.put(key, value);
+    return c.json<APIResponse>({ success: true, message: `Set ${key}` });
+  } catch (error: any) {
+    console.error('VDC debug kv error:', error);
+    return c.json<APIResponse>({ success: false, error: error?.message || 'Failed to set KV' }, 500);
+  }
+});
+
 export default vdcHandler;

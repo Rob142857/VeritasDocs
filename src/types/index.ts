@@ -113,6 +113,8 @@ export interface Environment {
   SYSTEM_KYBER_PUBLIC_KEY: string;
   SYSTEM_KEY_VERSION: string;
   SYSTEM_KEY_ID: string;
+  // Precompiled WASM binding configured via wrangler.toml [wasm_modules]
+  PQC_WASM?: WebAssembly.Module;
 }
 
 export interface APIResponse<T = any> {

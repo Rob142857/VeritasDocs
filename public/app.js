@@ -122,8 +122,9 @@ class VeritasApp {
           </div>
           
           <div class="form-group">
-            <label class="label" for="private-key">Private Key</label>
-            <textarea id="private-key" class="textarea" placeholder="Enter your private key..." required></textarea>
+            <label class="label" for="private-key">Dilithium Private Key (for signing)</label>
+            <textarea id="private-key" class="textarea" placeholder="Enter your Dilithium private key..." required></textarea>
+            <small style="color: #666;">This is the Dilithium private key from your downloaded key file. It starts with a different sequence than your Kyber key.</small>
           </div>
           
           <button type="submit" class="btn btn-primary" style="width: 100%;">Login</button>
@@ -345,23 +346,53 @@ class VeritasApp {
     const email = document.getElementById('email').value;
     const privateKey = document.getElementById('private-key').value;
 
+    if (!email || !privateKey) {
+      this.showAlert('error', 'Email and private key are required');
+      return;
+    }
+
     try {
+      this.showAlert('info', 'Initializing post-quantum cryptography...');
+
+      // Step 1: Initialize PQC
+      console.log('Initializing PQC for login...');
+      await window.VeritasCrypto.ensureCryptoReady();
+      console.log('PQC ready for login');
+
+      // Step 2: Create login challenge
+      const timestamp = Date.now();
+      const challenge = `login:${email}:${timestamp}`;
+      console.log('Login challenge:', challenge);
+
+      // Step 3: Sign the challenge with Dilithium private key
+      console.log('Signing login challenge...');
+      const signature = await window.VeritasCrypto.signData(challenge, privateKey);
+      console.log('Challenge signed');
+
+      // Step 4: Send zero-knowledge proof (email, signature, timestamp)
       const response = await fetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, privateKey }),
+        body: JSON.stringify({ email, signature, timestamp }),
       });
 
       const result = await response.json();
       if (result.success) {
         this.currentUser = result.data.user;
+        // Store additional data from zero-knowledge login
+        this.currentUser.kyberPublicKey = result.data.kyberPublicKey;
+        this.currentUser.dilithiumPublicKey = result.data.dilithiumPublicKey;
+        this.currentUser.encryptedUserData = result.data.encryptedUserData;
+        this.currentUser.sessionToken = result.data.sessionToken;
+
         localStorage.setItem('veritas-user', JSON.stringify(this.currentUser));
         this.navigateTo('dashboard');
       } else {
         this.showAlert('error', result.error || 'Login failed');
       }
     } catch (error) {
-      this.showAlert('error', 'Network error. Please try again.');
+      console.error('Login error:', error);
+      this.showAlert('error', 'Login error: ' + error.message);
     }
   }
 
@@ -565,7 +596,7 @@ class VeritasApp {
           'If compromised, your documents and account are at risk'
         ],
         usage: {
-          login: 'Use the Kyber private key to login and decrypt documents',
+          login: 'Use the Dilithium private key to login (signs authentication challenges)',
           signing: 'Dilithium private key is used automatically for blockchain transactions',
           recovery: 'Recovery phrase can restore access if keys are lost (future feature)'
         }
@@ -770,6 +801,107 @@ ${this.currentUser.email}`;
     // In a real app, this would be stored securely (encrypted in localStorage or using a password manager)
     // For now, we'll prompt the user to enter it when needed
     return prompt('Please enter your private key to authorize this action:');
+  }
+
+  async handleCreateAsset() {
+    const title = document.getElementById('title').value;
+    const description = document.getElementById('description').value;
+    const documentType = document.getElementById('document-type').value;
+    const fileInput = document.getElementById('document-file');
+    const privateKey = document.getElementById('private-key-create').value;
+
+    if (!title || !fileInput.files[0] || !privateKey) {
+      this.showAlert('error', 'Please fill in all required fields');
+      return;
+    }
+
+    const file = fileInput.files[0];
+    console.log('Document loaded, size:', file.size);
+
+    try {
+      this.showAlert('info', 'Initializing post-quantum cryptography...');
+
+      // Step 1: Initialize PQC
+      console.log('Initializing PQC...');
+      await window.VeritasCrypto.ensureCryptoReady();
+      console.log('PQC ready');
+
+      // Step 2: Read file content
+      console.log('Reading document...');
+      const reader = new FileReader();
+      reader.onload = async (e) => {
+        try {
+          const documentData = e.target.result;
+          console.log('Document loaded, size:', documentData.length);
+
+          // Step 3: Encrypt document
+          console.log('Encrypting document...');
+          const encryptedData = await window.VeritasCrypto.encryptDocumentData(
+            documentData,
+            this.currentUser.kyberPublicKey
+          );
+          console.log('Document encrypted, creating signature...');
+
+          // Step 4: Create document hash
+          const documentHash = await window.VeritasCrypto.hashData(documentData);
+          console.log('Document hash created:', documentHash);
+
+          // Step 5: Create signature payload
+          const signaturePayload = JSON.stringify({
+            userId: this.currentUser.id,
+            title,
+            description,
+            documentType,
+            documentHash,
+            timestamp: Date.now()
+          });
+          console.log('Creating signature for payload length:', signaturePayload.length);
+
+          // Step 6: Sign the payload
+          const signature = await window.VeritasCrypto.signData(signaturePayload, privateKey);
+          console.log('Signature created');
+
+          // Step 7: Send to server
+          console.log('Sending asset creation request...');
+          const response = await fetch('/api/web3-assets/create-web3', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              userId: this.currentUser.id,
+              title,
+              description,
+              documentType,
+              documentData: encryptedData,
+              signature,
+              signaturePayload,
+              signatureVersion: '1.0'
+            }),
+          });
+
+          const result = await response.json();
+          console.log('Server response:', result);
+
+          if (result.success) {
+            this.showAlert('success', 'Asset created successfully! Redirecting to payment...');
+            // Redirect to Stripe checkout
+            setTimeout(() => {
+              window.location.href = result.data.stripeUrl;
+            }, 2000);
+          } else {
+            console.error('HTTP Error:', response.status, result);
+            this.showAlert('error', result.error || 'Asset creation failed');
+          }
+        } catch (error) {
+          console.error('Asset creation error:', error);
+          this.showAlert('error', 'Asset creation failed: ' + error.message);
+        }
+      };
+
+      reader.readAsText(file);
+    } catch (error) {
+      console.error('Asset creation error:', error);
+      this.showAlert('error', 'Asset creation failed: ' + error.message);
+    }
   }
 
   showAlert(type, message) {

@@ -67,6 +67,66 @@ async function authenticateUser(c: any): Promise<User | null> {
   }
 }
 
+// Debug endpoint to check user status (remove in production)
+authHandler.get('/debug-user/:email', async (c) => {
+  try {
+    const env = c.env;
+    const email = c.req.param('email');
+
+    console.log(`🔍 Debug lookup for email: ${email}`);
+
+    const userId = await env.VERITAS_KV.get(`user:email:${email}`);
+    if (!userId) {
+      return c.json({ success: false, error: 'User not found', step: 'user_lookup' });
+    }
+
+    console.log(`✅ Found userId: ${userId}`);
+
+    const userData = await env.VERITAS_KV.get(`user:${userId}`);
+    if (!userData) {
+      return c.json({ success: false, error: 'User data not found', step: 'user_data', userId });
+    }
+
+    const user: User = JSON.parse(userData);
+    console.log(`✅ Found user data for: ${userId}`);
+
+    const vdcTxId = await env.VERITAS_KV.get(`vdc:user:${userId}`);
+    if (!vdcTxId) {
+      return c.json({ success: false, error: 'VDC transaction mapping not found', step: 'vdc_mapping', userId, user: { id: user.id, email: user.email } });
+    }
+
+    console.log(`✅ Found VDC transaction ID: ${vdcTxId}`);
+
+    const vdc = await initializeVDC(env);
+    const vdcTx = await vdc.getTransaction(vdcTxId);
+    if (!vdcTx) {
+      return c.json({ success: false, error: 'VDC transaction data not found', step: 'vdc_transaction', userId, vdcTxId });
+    }
+
+    console.log(`✅ Found VDC transaction data`);
+
+    const dilithiumPublicKey = vdcTx.data?.dilithiumPublicKey || user.dilithiumPublicKey;
+    const hasEncryptedData = !!vdcTx.data?.encryptedUserData;
+
+    return c.json({
+      success: true,
+      data: {
+        userId,
+        email: user.email,
+        accountType: user.accountType,
+        vdcTxId,
+        vdcTxType: vdcTx.type,
+        hasDilithiumKey: !!dilithiumPublicKey,
+        hasEncryptedData,
+        dilithiumKeyLength: dilithiumPublicKey?.length || 0
+      }
+    });
+  } catch (error: any) {
+    console.error('Debug error:', error);
+    return c.json({ success: false, error: 'Debug endpoint error', details: error?.message || String(error) });
+  }
+});
+
 // Get token info (for frontend to retrieve email)
 authHandler.get('/token-info', async (c) => {
   try {
@@ -105,8 +165,6 @@ authHandler.get('/token-info', async (c) => {
     return c.json<APIResponse>({ success: false, error: 'Internal server error' }, 500);
   }
 });
-
-// Generate one-time account creation link (admin only)
 authHandler.post('/create-link', async (c) => {
   try {
     const env = c.env;
@@ -308,9 +366,9 @@ authHandler.post('/activate', async (c) => {
     }
 
     // Store the blockchain transaction in KV (will migrate to IPFS later)
-    const txId = `tx_${userId}_${Date.now()}`;
-    await env.VERITAS_KV.put(`blockchain:tx:${txId}`, JSON.stringify(blockchainTx));
-    await env.VERITAS_KV.put(`blockchain:user:${userId}`, txId); // Map user to their registration tx
+    const kvTxId = `tx_${userId}_${Date.now()}`;
+    await env.VERITAS_KV.put(`blockchain:tx:${kvTxId}`, JSON.stringify(blockchainTx));
+    await env.VERITAS_KV.put(`blockchain:user:${userId}`, kvTxId); // Map user to their registration tx
 
     // Create minimal user record (most data is in encrypted blockchain tx)
     const user: User = {
@@ -320,10 +378,10 @@ authHandler.post('/activate', async (c) => {
       dilithiumPublicKey,
       encryptedPrivateData: JSON.stringify({
         recoveryPhrase, // Only recovery phrase stored here
-        blockchainTxId: txId, // Reference to blockchain transaction
+        blockchainTxId: kvTxId, // Reference to blockchain transaction
         dilithiumPublicKey // For signature verification
       }),
-      blockchainTxId: txId,
+      blockchainTxId: kvTxId,
       createdAt: Date.now(),
       invitedBy: oneTimeLink.inviteType === 'user' ? oneTimeLink.createdBy : undefined,
       hasActivated: true,
@@ -345,7 +403,7 @@ authHandler.post('/activate', async (c) => {
         userId,
         kyberPublicKey,
         dilithiumPublicKey,
-        blockchainTxId: txId,
+        blockchainTxId: kvTxId,
         accountType, // Return account type so UI knows user permissions
         recoveryPhrase,
         message: 'Save both private keys securely! You cannot recover them later.'
@@ -372,51 +430,72 @@ authHandler.post('/login', async (c) => {
       return c.json<APIResponse>({ success: false, error: 'Login request timestamp is invalid or expired' }, 400);
     }
 
+    console.log(`🔍 Login attempt for email: ${email}`);
+
     const userId = await env.VERITAS_KV.get(`user:email:${email}`);
     if (!userId) {
+      console.log(`❌ User not found for email: ${email}`);
       return c.json<APIResponse>({ success: false, error: 'User not found' }, 404);
     }
 
+    console.log(`✅ Found userId: ${userId} for email: ${email}`);
+
     const userData = await env.VERITAS_KV.get(`user:${userId}`);
     if (!userData) {
+      console.log(`❌ User data not found for userId: ${userId}`);
       return c.json<APIResponse>({ success: false, error: 'User data not found' }, 404);
     }
 
     const user: User = JSON.parse(userData);
+    console.log(`✅ Loaded user data for: ${userId}`);
 
-    const vdcTxId = user.blockchainTxId || await env.VERITAS_KV.get(`vdc:user:${userId}`);
+    const vdcTxId = await env.VERITAS_KV.get(`vdc:user:${userId}`);
     if (!vdcTxId) {
-      console.error(`VDC transaction not found for user ${userId}`);
+      console.error(`❌ VDC transaction not found for user ${userId}`);
       return c.json<APIResponse>({ success: false, error: 'User blockchain registration not found' }, 500);
     }
+
+    console.log(`✅ Found VDC transaction ID: ${vdcTxId} for user: ${userId}`);
 
     const vdc = await initializeVDC(env);
     const vdcTx = await vdc.getTransaction(vdcTxId);
     if (!vdcTx) {
-      console.error(`VDC transaction data not found: ${vdcTxId}`);
+      console.error(`❌ VDC transaction data not found: ${vdcTxId}`);
       return c.json<APIResponse>({ success: false, error: 'Blockchain transaction data not found' }, 500);
     }
 
+    console.log(`✅ Loaded VDC transaction: ${vdcTxId}, type: ${vdcTx.type}`);
+
     const encryptedUserData = vdcTx.data?.encryptedUserData;
     if (!encryptedUserData) {
-      console.error(`Encrypted user data not found in VDC transaction ${vdcTxId}`);
+      console.error(`❌ Encrypted user data not found in VDC transaction ${vdcTxId}`);
       return c.json<APIResponse>({ success: false, error: 'Encrypted user data not found in blockchain' }, 500);
     }
 
+    console.log(`✅ Found encrypted user data in VDC transaction`);
+
     const dilithiumPublicKey = vdcTx.data?.dilithiumPublicKey || user.dilithiumPublicKey;
     if (!dilithiumPublicKey) {
-      console.error('Dilithium public key missing for user', userId);
+      console.error(`❌ Dilithium public key missing for user ${userId}`);
+      console.error(`   VDC data:`, vdcTx.data);
+      console.error(`   User data:`, user);
       return c.json<APIResponse>({ success: false, error: 'Public key not available for signature verification' }, 500);
     }
 
+    console.log(`✅ Found Dilithium public key for signature verification`);
+
     const maataraClient = new MaataraClient(env);
     const challenge = `login:${email}:${timestamp}`;
+    console.log(`🔐 Verifying signature for challenge: ${challenge}`);
+
     const isValid = await maataraClient.verifySignature(challenge, signature, dilithiumPublicKey);
 
     if (!isValid) {
-      console.error('Invalid signature for user', userId);
+      console.error(`❌ Invalid signature for user ${userId}`);
       return c.json<APIResponse>({ success: false, error: 'Signature verification failed' }, 401);
     }
+
+    console.log(`✅ Signature verification successful for user: ${userId}`);
 
     const sessionToken = await createSession(env, userId);
 
@@ -436,7 +515,7 @@ authHandler.post('/login', async (c) => {
       message: 'Login successful - zero-knowledge proof verified',
     });
   } catch (error) {
-    console.error('Error during login:', error);
+    console.error('❌ Error during login:', error);
     return c.json<APIResponse>({ success: false, error: 'Internal server error' }, 500);
   }
 });

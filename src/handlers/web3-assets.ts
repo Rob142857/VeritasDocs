@@ -1,7 +1,7 @@
 // Enhanced assets handler with IPFS and Ethereum anchoring
 import { Hono } from 'hono';
 import { Environment, Asset, User, APIResponse } from '../types';
-import { MaataraClient } from '../utils/crypto';
+import { MaataraClient, hashString } from '../utils/crypto';
 import { IPFSClient, createIPFSRecord } from '../utils/ipfs';
 import { EthereumAnchoringClient, anchorDocumentsToEthereum } from '../utils/ethereum';
 
@@ -24,18 +24,44 @@ enhancedAssetHandler.post('/create-web3', async (c) => {
       documentData,
       isPubliclySearchable,
       publicMetadata,
-      privateKey,
+      signature,        // Client-side signature
+      signaturePayload, // What was signed client-side
+      signatureVersion, // Version of signature format
     } = requestBody;
 
     console.log('Validating required fields...');
-    if (!userId || !title || !documentData || !privateKey) {
+    if (!userId || !title || !documentData || !signature || !signaturePayload) {
       return c.json<APIResponse>({ 
         success: false, 
-        error: 'User ID, title, document data, and private key are required' 
+        error: 'User ID, title, document data, signature, and signature payload are required' 
       }, 400);
     }
 
-    // Verify user exists
+    // Parse and validate signature payload
+    let parsedSignaturePayload;
+    try {
+      parsedSignaturePayload = JSON.parse(signaturePayload);
+    } catch (e) {
+      return c.json<APIResponse>({ 
+        success: false, 
+        error: 'Invalid signature payload format' 
+      }, 400);
+    }
+
+    // Verify document hash matches
+    console.log('Verifying document hash...');
+    const maataraClient = new MaataraClient(env);
+    const documentHash = await hashString(documentData);
+    
+    if (documentHash !== parsedSignaturePayload.documentHash) {
+      return c.json<APIResponse>({ 
+        success: false, 
+        error: 'Document hash verification failed' 
+      }, 400);
+    }
+    console.log('Document hash verified successfully');
+
+    // Verify user exists and get their public key for signature verification
     const userData = await env.VERITAS_KV.get(`user:${userId}`);
     if (!userData) {
       return c.json<APIResponse>({ success: false, error: 'User not found' }, 404);
@@ -43,11 +69,26 @@ enhancedAssetHandler.post('/create-web3', async (c) => {
 
     const user: User = JSON.parse(userData);
     console.log('User found:', user.email);
-    
-    // Initialize clients
-    console.log('Initializing clients...');
-    const maataraClient = new MaataraClient(env);
-    console.log('Maatara client initialized (for signing only)');
+
+    // Verify the client-side signature
+    console.log('Verifying client signature...');
+    const isSignatureValid = await maataraClient.verifySignature(
+      signaturePayload,
+      signature,
+      user.dilithiumPublicKey
+    );
+
+    if (!isSignatureValid) {
+      return c.json<APIResponse>({ 
+        success: false, 
+        error: 'Invalid signature - asset creation rejected' 
+      }, 400);
+    }
+
+    console.log('Client signature verified successfully');
+
+    // Initialize clients for IPFS and Ethereum operations
+    console.log('Initializing IPFS and Ethereum clients...');
     const ipfsClient = new IPFSClient(env);
     console.log('IPFS client initialized');
     const ethereumClient = new EthereumAnchoringClient(env);
@@ -121,31 +162,29 @@ enhancedAssetHandler.post('/create-web3', async (c) => {
       };
     }
 
-    // 5. Create Ethereum anchor with both content and metadata hashes (skip if service fails)
+    // 5. Create Ethereum anchor placeholder (client-side anchoring not implemented yet)
     let ethereumAnchor;
     try {
-      ethereumAnchor = await anchorDocumentsToEthereum(
-        ethereumClient,
-        userId,
-        privateKey,
-        [ipfsRecord.hash, metadataRecord.hash]
-      );
-    } catch (ethError) {
-      console.warn('Ethereum anchoring failed, using placeholder:', ethError);
+      // TODO: Implement client-side Ethereum anchoring with user signature
       ethereumAnchor = {
-        anchorHash: `eth_placeholder_${Date.now()}`,
+        anchorHash: `placeholder_${Date.now()}`,
         ethereumTxHash: `0x${Date.now().toString(16)}`,
         canonical: '',
-        signature: '',
+        signature: signature, // Use client signature
+        timestamp: Date.now()
+      };
+    } catch (ethError) {
+      console.warn('Ethereum anchoring placeholder used:', ethError);
+      ethereumAnchor = {
+        anchorHash: `placeholder_${Date.now()}`,
+        ethereumTxHash: `0x${Date.now().toString(16)}`,
+        canonical: '',
+        signature: signature,
         timestamp: Date.now()
       };
     }
 
-    // 6. Sign the asset metadata with Dilithium
-    const signature = await maataraClient.signData(
-      JSON.stringify(assetMetadata),
-      privateKey
-    );
+    // 6. Use the verified client signature
 
     // 7. Generate unique token ID
     const tokenId = `VRT_${Date.now()}_${Math.random().toString(36).substr(2, 6).toUpperCase()}`;

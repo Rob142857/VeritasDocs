@@ -13,6 +13,13 @@ import {
   b64uDecode,
 } from '@maatara/core-pqc';
 import { Environment } from '../types';
+// Import the WASM module directly for Cloudflare Workers (ES module)
+// This avoids runtime Wasm code generation restrictions by using a precompiled module
+// Wrangler/esbuild will bundle this correctly for the Worker environment
+// Note: path is relative to this file (src/utils) going up to project root then into public/
+// If bundling fails, we'll fall back to fetching the static endpoint
+// @ts-ignore - wasm module type provided by wrangler/esbuild
+import pqcWasmModule from '../../public/core_pqc_wasm_bg.wasm';
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -30,13 +37,32 @@ export class MaataraClient {
   private async ensureWasm(): Promise<void> {
     if (!MaataraClient.wasmInitPromise) {
       MaataraClient.wasmInitPromise = (async () => {
-        const wasmBytes = await this.env.VERITAS_KV.get('pqc-wasm', 'arrayBuffer');
-        if (!wasmBytes) {
-          throw new Error('PQC WASM binary not found in KV (key: pqc-wasm). Upload the WASM bundle.');
+        // Prefer precompiled WASM module import (avoids runtime code generation restrictions)
+        if (pqcWasmModule) {
+          // @maatara/core-pqc initWasm accepts either a Response or a WebAssembly.Module in Workers
+          // If your version only supports Response, fall back to fetching the static endpoint below
+          // Types may not reflect Module support; try-catch and fallback
+          try {
+            // @ts-ignore: allow passing precompiled module if supported
+            await initWasm(pqcWasmModule);
+            return;
+          } catch (_e) {
+            // Fallback to Response-based init via internal fetch of our static endpoint
+          }
         }
-        // IMPORTANT: Initialize WASM using a Response object to comply with runtime restrictions
-        // and project guideline: ALWAYS initialize WASM with fetch Response object
-        const resp = new Response(wasmBytes, { headers: { 'Content-Type': 'application/wasm' } });
+
+        // Fallback: fetch the WASM from our own static endpoint to get a Response object
+        const resp = await fetch('https://veritas-docs-production.rme-6e5.workers.dev/static/core_pqc_wasm_bg.wasm');
+        if (!resp.ok) {
+          // As a last resort, load bytes from KV and construct a Response
+          const wasmBytes = await this.env.VERITAS_KV.get('pqc-wasm', 'arrayBuffer');
+          if (!wasmBytes) {
+            throw new Error('PQC WASM not available via binding, static route, or KV (key: pqc-wasm).');
+          }
+          const kvResp = new Response(wasmBytes, { headers: { 'Content-Type': 'application/wasm' } });
+          await initWasm(kvResp);
+          return;
+        }
         await initWasm(resp);
       })().catch((error) => {
         MaataraClient.wasmInitPromise = null;

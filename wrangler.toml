@@ -37,6 +37,7 @@ binding = "VERITAS_KV"
 id = "77a8b18c45f341b7aa1b91de1dc8a55e"
 preview_id = "f280a31ef23b4d7cb29d5ac314457674"
 
+
 # Add your secrets using: wrangler secret put SECRET_NAME
 # STRIPE_SECRET_KEY
 # STRIPE_WEBHOOK_SECRET

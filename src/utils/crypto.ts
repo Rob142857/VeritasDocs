@@ -34,7 +34,10 @@ export class MaataraClient {
         if (!wasmBytes) {
           throw new Error('PQC WASM binary not found in KV (key: pqc-wasm). Upload the WASM bundle.');
         }
-        await initWasm(new Uint8Array(wasmBytes));
+        // IMPORTANT: Initialize WASM using a Response object to comply with runtime restrictions
+        // and project guideline: ALWAYS initialize WASM with fetch Response object
+        const resp = new Response(wasmBytes, { headers: { 'Content-Type': 'application/wasm' } });
+        await initWasm(resp);
       })().catch((error) => {
         MaataraClient.wasmInitPromise = null;
         throw error;

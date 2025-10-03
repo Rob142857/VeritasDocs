@@ -1,37 +1,34 @@
-# Veritas Documents - Development Plan & Roadmap
+# Development Plan - Veritas Documents
 
-**Version**: 1.0.1  
-**Last Updated**: January 3, 2025  
-**Status**: Production
+**Version**: 1.1.0  
+**Last Updated**: October 3, 2025  
+**Status**: Production Roadmap  
+**Version**: 1.1.0  
+**Last Updated**: October 3, 2025  
+**Status**: Production Roadmap  
+**Summary**: Updated roadmap outlining completed milestones, in-flight work, and upcoming enhancements for Veritas Documents.  
+**Keywords**: roadmap, planning, milestones, backlog, priorities
 
 ---
 
 ## 📋 Project Overview
 
-**Veritas Documents** is a zero-knowledge NFT-based legal document storage platform leveraging post-quantum cryptography, IPFS decentralized storage, VDC blockchain, and Ethereum anchoring. The system provides secure, verifiable, and immutable legal document management with true zero-knowledge architecture.
+Veritas Documents is a zero-knowledge NFT legal document platform combining Cloudflare Workers, post-quantum cryptography (Kyber-768 + Dilithium-2), IPFS pinning, Stripe, and the Veritas Documents Chain (VDC) to deliver immutable, court-ready records.
 
 ### Core Technology Stack
-- **Backend**: Cloudflare Workers with Hono framework
+
+- **Backend**: Cloudflare Workers powered by Hono
 - **Cryptography**: Ma'atara Protocol v0.2.3 (Kyber-768 + Dilithium-2, NIST standardized)
-- **Storage**: Cloudflare KV + IPFS (Pinata)
-- **Blockchain**: VDC (Veritas Documents Chain) + Ethereum anchoring
-- **Payments**: Stripe integration ($25 per document)
-- **Frontend**: TypeScript SPA with WASM crypto
-- **Database**: Cloudflare KV Store
+- **Storage**: Cloudflare KV for metadata + Pinata IPFS for content
+- **Blockchain**: VDC with dual Dilithium signatures and Ethereum anchoring
+- **Payments**: Stripe Checkout ($25/document)
+- **Frontend**: TypeScript SPA with WASM crypto modules
 
 ---
 
-## ✅ COMPLETED FEATURES (100%)
+## ✅ Completed Feature Pillars
 
-### 🏗️ **Core Infrastructure**
-- [x] **Project Structure**: Complete Cloudflare Workers setup with TypeScript
-- [x] **Dependencies**: All core packages installed and configured
-- [x] **Build System**: TypeScript compilation and Wrangler configuration
-- [x] **Development Environment**: Local dev server with hot reloading
-- [x] **Production Deployment**: Deployed to veritas-docs-production.rme-6e5.workers.dev
-
-### 🔐 **Zero-Knowledge Post-Quantum Cryptography**
-- [x] **Ma'atara SDK Integration**: Real `@maatara/core-pqc` v0.2.3 with WASM
+### 🔐 Zero-Knowledge Post-Quantum Cryptography
 - [x] **Client-Side Key Generation**: Kyber-768 + Dilithium-2 in browser
 - [x] **WASM Initialization**: Proper fetch Response object initialization
 - [x] **Dilithium Signatures**: Base64url string handling (not bytes)

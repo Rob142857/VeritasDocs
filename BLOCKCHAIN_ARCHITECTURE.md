@@ -1,8 +1,13 @@
 # Veritas Documents Blockchain Architecture
 
-**Version**: 1.0.1  
-**Last Updated**: January 3, 2025  
-**Status**: Production
+**Version**: 1.1.0  
+**Last Updated**: October 3, 2025  
+**Status**: Production  
+**Version**: 1.1.0  
+**Last Updated**: October 3, 2025  
+**Status**: Production  
+**Summary**: Deep-dive architecture reference for the Veritas Documents Chain, covering consensus design, dual signatures, block format, and compliance implications.  
+**Keywords**: blockchain, architecture, consensus, signatures, compliance
 
 ---
 

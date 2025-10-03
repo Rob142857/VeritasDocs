@@ -1,5 +1,16 @@
 # Activation Token Flow - Veritas Documents
 
+**Version**: 1.1.0  
+**Last Updated**: October 3, 2025  
+**Status**: Production  
+**Audience**: Users, Developers  
+**Category**: User Guide  
+**Priority**: 3  
+**Summary**: Detailed walkthrough of the invitation, activation, and zero-knowledge key generation funnel for new Veritas accounts.  
+**Keywords**: activation, onboarding, token, workflow, zero-knowledge
+
+---
+
 ## Overview
 The activation token system provides secure, one-time account creation with client-side key generation and blockchain registration.
 

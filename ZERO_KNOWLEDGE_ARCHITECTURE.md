@@ -1,8 +1,13 @@
 # Zero-Knowledge Architecture - Post-Quantum Implementation
 
-**Version**: 1.0.1  
-**Last Updated**: January 3, 2025  
-**Status**: Production
+**Version**: 1.1.0  
+**Last Updated**: October 3, 2025  
+**Status**: Production  
+**Audience**: Developers, Legal  
+**Category**: Architecture  
+**Priority**: 5  
+**Summary**: Comprehensive blueprint of zero-knowledge controls, machine identity lifecycle, and post-quantum cryptography enforcement across Veritas.  
+**Keywords**: zero-knowledge, kyber, dilithium, machine identity, compliance
 
 ---
 
@@ -796,7 +801,7 @@ This implementation provides:
 
 ---
 
-**Version**: 1.0.1  
-**Last Updated**: January 3, 2025  
-**Status**: Production Ready  
+**Version**: 1.1.0  
+**Last Updated**: October 3, 2025  
+**Status**: Production
 **Deployment**: https://veritas-docs-production.rme-6e5.workers.dev

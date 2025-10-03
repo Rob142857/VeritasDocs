@@ -1,5 +1,16 @@
 # Blockchain-Based User Registration System
 
+**Version**: 1.1.0  
+**Last Updated**: October 3, 2025  
+**Status**: Production  
+**Audience**: Developers, Legal  
+**Category**: Architecture  
+**Priority**: 7  
+**Summary**: Operational blueprint for the user registration blockchain workflow, covering key generation, encryption, and dual-signature validation.  
+**Keywords**: registration, blockchain, workflow, signatures, compliance
+
+---
+
 ## Overview
 
 The Veritas Documents platform now implements a true blockchain-based user registration system where each user account activation creates a cryptographically signed transaction stored on the Veritas blockchain.

@@ -1,5 +1,16 @@
 # 🔐 Veritas Documents
 
+**Version**: 1.1.0  
+**Last Updated**: October 3, 2025  
+**Status**: Production  
+**Audience**: Legal, Users, Developers  
+**Category**: Overview  
+**Priority**: 1  
+**Summary**: High-level overview of the Veritas Documents platform, covering zero-knowledge security, blockchain architecture, and operational pillars for legal and technical stakeholders.  
+**Keywords**: overview, legal, platform, security, blockchain
+
+---
+
 **Zero-Knowledge Legal Document Storage with Post-Quantum Cryptography**
 
 A secure, decentralized legal document storage platform built on Cloudflare Workers, featuring post-quantum cryptography (Kyber-768 + Dilithium-2), IPFS storage, Ethereum blockchain anchoring, and a custom VDC blockchain for identity verification.

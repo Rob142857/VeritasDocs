@@ -1,8 +1,13 @@
 # Security Guardrails - Account Activation & Key Management
 
-**Version**: 1.0.1  
-**Last Updated**: January 3, 2025  
-**Status**: Production
+**Version**: 1.1.0  
+**Last Updated**: October 3, 2025  
+**Status**: Production  
+**Audience**: Users  
+**Category**: User Guide  
+**Priority**: 2  
+**Summary**: Critical guardrails explaining key management responsibilities, activation warnings, and zero-knowledge implications for end users.  
+**Keywords**: security, keys, activation, backup, zero-knowledge
 
 ---
 
@@ -257,7 +262,7 @@ For comprehensive security details, see:
 
 ---
 
-**Version**: 1.0.1  
-**Last Updated**: January 3, 2025  
+**Version**: 1.1.0  
+**Last Updated**: October 3, 2025  
 **Status**: Production  
 **Production URL**: https://veritas-docs-production.rme-6e5.workers.dev

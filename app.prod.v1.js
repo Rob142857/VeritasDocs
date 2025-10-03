@@ -1,510 +1,4 @@
-import { Hono } from 'hono';
-import { cors } from 'hono/cors';
 
-import { Environment } from './types';
-import { authHandler } from './handlers/auth';
-import { assetHandler } from './handlers/assets';
-import { enhancedAssetHandler } from './handlers/web3-assets';
-import { userHandler } from './handlers/users';
-import { stripeHandler } from './handlers/stripe';
-import { searchHandler } from './handlers/search';
-import vdcHandler from './handlers/vdc';
-
-type Bindings = Environment;
-
-const app = new Hono<{ Bindings: Bindings }>();
-
-// CORS middleware
-app.use('*', cors({
-  origin: ['https://veritas-documents.workers.dev', 'http://localhost:8787'],
-  allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowHeaders: ['Content-Type', 'Authorization'],
-}));
-
-// Serve static files
-app.get('/static/styles.css', async (c) => {
-  const css = `/* Veritas Documents - Clean, minimalist styles */
-
-:root {
-  --primary-color: #2563eb;
-  --primary-hover: #1d4ed8;
-  --secondary-color: #64748b;
-  --success-color: #059669;
-  --error-color: #dc2626;
-  --warning-color: #d97706;
-  --background: #ffffff;
-  --surface: #f8fafc;
-  --border: #e2e8f0;
-  --text-primary: #0f172a;
-  --text-secondary: #64748b;
-  --text-muted: #94a3b8;
-}
-
-* {
-  margin: 0;
-  padding: 0;
-  box-sizing: border-box;
-}
-
-body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', sans-serif;
-  background-color: var(--background);
-  color: var(--text-primary);
-  line-height: 1.6;
-}
-
-.container {
-  max-width: 1200px;
-  margin: 0 auto;
-  padding: 0 1rem;
-}
-
-/* Header */
-.header {
-  background-color: var(--background);
-  border-bottom: 1px solid var(--border);
-  padding: 1rem 0;
-}
-
-.header .container {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-
-.logo {
-  font-size: 1.5rem;
-  font-weight: 600;
-  color: var(--primary-color);
-}
-
-.nav {
-  display: flex;
-  gap: 2rem;
-}
-
-.nav a {
-  color: var(--text-secondary);
-  text-decoration: none;
-  font-weight: 500;
-  transition: color 0.2s;
-}
-
-.nav a:hover,
-.nav a.active {
-  color: var(--primary-color);
-}
-
-/* Main content */
-.main {
-  min-height: calc(100vh - 80px);
-  padding: 2rem 0;
-}
-
-/* Cards */
-.card {
-  background-color: var(--background);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 1.5rem;
-  margin-bottom: 1.5rem;
-}
-
-.card-header {
-  margin-bottom: 1rem;
-}
-
-.card-title {
-  font-size: 1.25rem;
-  font-weight: 600;
-  margin-bottom: 0.5rem;
-}
-
-.card-subtitle {
-  color: var(--text-secondary);
-  font-size: 0.875rem;
-}
-
-/* Forms */
-.form-group {
-  margin-bottom: 1rem;
-}
-
-.label {
-  display: block;
-  margin-bottom: 0.5rem;
-  font-weight: 500;
-  color: var(--text-primary);
-}
-
-.input,
-.textarea,
-.select {
-  width: 100%;
-  padding: 0.75rem;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  font-size: 1rem;
-  transition: border-color 0.2s, box-shadow 0.2s;
-}
-
-.input:focus,
-.textarea:focus,
-.select:focus {
-  outline: none;
-  border-color: var(--primary-color);
-  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
-}
-
-.textarea {
-  resize: vertical;
-  min-height: 100px;
-}
-
-/* Buttons */
-.btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0.75rem 1.5rem;
-  border: none;
-  border-radius: 6px;
-  font-size: 1rem;
-  font-weight: 500;
-  text-decoration: none;
-  cursor: pointer;
-  transition: all 0.2s;
-  gap: 0.5rem;
-}
-
-.btn-primary {
-  background-color: var(--primary-color);
-  color: white;
-}
-
-.btn-primary:hover {
-  background-color: var(--primary-hover);
-}
-
-.btn-secondary {
-  background-color: var(--surface);
-  color: var(--text-primary);
-  border: 1px solid var(--border);
-}
-
-.btn-secondary:hover {
-  background-color: var(--border);
-}
-
-.btn-success {
-  background-color: var(--success-color);
-  color: white;
-}
-
-.btn-danger {
-  background-color: var(--error-color);
-  color: white;
-}
-
-.btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-/* Alerts */
-.alert {
-  padding: 1rem;
-  border-radius: 6px;
-  margin-bottom: 1rem;
-}
-
-.alert-success {
-  background-color: #f0fdf4;
-  color: var(--success-color);
-  border: 1px solid #bbf7d0;
-}
-
-.alert-error {
-  background-color: #fef2f2;
-  color: var(--error-color);
-  border: 1px solid #fecaca;
-}
-
-.alert-warning {
-  background-color: #fffbeb;
-  color: var(--warning-color);
-  border: 1px solid #fed7aa;
-}
-
-/* Grid */
-.grid {
-  display: grid;
-  gap: 1.5rem;
-}
-
-.grid-2 {
-  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-}
-
-.grid-3 {
-  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-}
-
-/* Asset cards */
-.asset-card {
-  background-color: var(--background);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 1.5rem;
-  transition: box-shadow 0.2s;
-}
-
-.asset-card:hover {
-  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
-}
-
-.asset-type {
-  display: inline-block;
-  padding: 0.25rem 0.75rem;
-  background-color: var(--surface);
-  border-radius: 4px;
-  font-size: 0.75rem;
-  font-weight: 500;
-  text-transform: uppercase;
-  margin-bottom: 0.5rem;
-}
-
-.asset-title {
-  font-size: 1.125rem;
-  font-weight: 600;
-  margin-bottom: 0.5rem;
-}
-
-.asset-description {
-  color: var(--text-secondary);
-  margin-bottom: 1rem;
-}
-
-.asset-meta {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  font-size: 0.875rem;
-  color: var(--text-muted);
-}
-
-/* Dashboard */
-.dashboard-stats {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-  gap: 1rem;
-  margin-bottom: 2rem;
-}
-
-.stat-card {
-  background-color: var(--surface);
-  padding: 1.5rem;
-  border-radius: 8px;
-  text-align: center;
-}
-
-.stat-number {
-  font-size: 2rem;
-  font-weight: 600;
-  color: var(--primary-color);
-  margin-bottom: 0.5rem;
-}
-
-.stat-label {
-  color: var(--text-secondary);
-  font-size: 0.875rem;
-}
-
-/* Loading states */
-.loading {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 2rem;
-}
-
-.spinner {
-  width: 32px;
-  height: 32px;
-  border: 3px solid var(--border);
-  border-top: 3px solid var(--primary-color);
-  border-radius: 50%;
-  animation: spin 1s linear infinite;
-}
-
-@keyframes spin {
-  0% { transform: rotate(0deg); }
-  100% { transform: rotate(360deg); }
-}
-
-/* Responsive */
-@media (max-width: 768px) {
-  .header .container {
-    flex-direction: column;
-    gap: 1rem;
-  }
-  
-  .nav {
-    flex-wrap: wrap;
-    justify-content: center;
-  }
-  
-  .container {
-    padding: 0 0.5rem;
-  }
-  
-  .card {
-    padding: 1rem;
-  }
-}
-
-/* Modal */
-.modal {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background-color: rgba(0, 0, 0, 0.5);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 1000;
-  padding: 1rem;
-}
-
-.modal-content {
-  background-color: var(--background);
-  border-radius: 12px;
-  max-width: 600px;
-  width: 100%;
-  max-height: 90vh;
-  overflow-y: auto;
-  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1);
-}
-
-.modal-header {
-  padding: 1.5rem;
-  border-bottom: 1px solid var(--border);
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-
-.modal-title {
-  font-size: 1.25rem;
-  font-weight: 600;
-}
-
-.modal-close {
-  background: none;
-  border: none;
-  font-size: 1.5rem;
-  color: var(--text-muted);
-  cursor: pointer;
-  padding: 0;
-  width: 32px;
-  height: 32px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.modal-close:hover {
-  color: var(--text-primary);
-}
-
-.modal-body {
-  padding: 1.5rem;
-}
-
-.modal-footer {
-  padding: 1.5rem;
-  border-top: 1px solid var(--border);
-  display: flex;
-  gap: 1rem;
-  justify-content: flex-end;
-}
-
-.checkbox-group {
-  display: flex;
-  align-items: flex-start;
-  gap: 0.75rem;
-  padding: 0.75rem;
-  background-color: var(--surface);
-  border-radius: 6px;
-  margin-bottom: 0.75rem;
-}
-
-.checkbox-group input[type="checkbox"] {
-  margin-top: 0.25rem;
-  cursor: pointer;
-}
-
-.checkbox-group label {
-  cursor: pointer;
-  font-size: 0.875rem;
-  line-height: 1.5;
-}
-
-/* Utility classes */
-.hidden { display: none !important; }
-.text-center { text-align: center; }
-.text-right { text-align: right; }
-.mb-0 { margin-bottom: 0 !important; }
-.mb-1 { margin-bottom: 0.5rem !important; }
-.mb-2 { margin-bottom: 1rem !important; }
-.mt-2 { margin-top: 1rem !important; }
-.p-4 { padding: 2rem !important; }`;
-
-  return c.text(css, 200, {
-    'Content-Type': 'text/css; charset=utf-8',
-    'Cache-Control': 'public, max-age=3600'
-  });
-});
-
-// Serve bundled frontend application from KV or inline
-app.get('/static/app.bundle.js', async (c) => {
-  try {
-    // Try to load from KV first
-    const env = c.env as Environment;
-    let bundle = await env.VERITAS_KV.get('frontend-bundle');
-    if (!bundle) {
-      // Fallback to legacy key name used in some manual uploads
-      bundle = await env.VERITAS_KV.get('app-bundle');
-    }
-    if (bundle) {
-      return c.text(bundle, 200, { 'Content-Type': 'application/javascript' });
-    }
-  } catch (error) {
-    console.error('Failed to load bundle from KV:', error);
-  }
-  
-  return c.text('console.error("Frontend bundle not found");', 200, { 'Content-Type': 'application/javascript' });
-});
-
-// Serve WASM file
-app.get('/static/core_pqc_wasm_bg.wasm', async (c) => {
-  try {
-    const env = c.env as Environment;
-    const wasm = await env.VERITAS_KV.get('pqc-wasm', 'arrayBuffer');
-    if (wasm) {
-      return c.body(wasm, 200, { 'Content-Type': 'application/wasm' });
-    }
-  } catch (error) {
-    console.error('Failed to load WASM from KV:', error);
-  }
-  
-  return c.text('WASM file not found', 404);
-});
-
-app.get('/static/app.js', async (c) => {
-  const js = `
 // Veritas Documents - Frontend Application
 
 // Load the bundled Post-Quantum Cryptography module
@@ -695,9 +189,9 @@ class VeritasApp {
     if (!nav) return;
 
     if (this.currentUser) {
-      nav.innerHTML = \`<a href="#" data-nav="dashboard" class="\${this.currentPage === 'dashboard' ? 'active' : ''}">Dashboard</a><a href="#" data-nav="create-asset" class="\${this.currentPage === 'create-asset' ? 'active' : ''}">Create Asset</a><a href="#" data-nav="search" class="\${this.currentPage === 'search' ? 'active' : ''}">Search</a><a href="#" data-nav="docs" class="\${this.currentPage === 'docs' ? 'active' : ''}">Docs</a><a href="#" data-nav="logout">Logout</a>\`;
+      nav.innerHTML = `<a href="#" data-nav="dashboard" class="${this.currentPage === 'dashboard' ? 'active' : ''}">Dashboard</a><a href="#" data-nav="create-asset" class="${this.currentPage === 'create-asset' ? 'active' : ''}">Create Asset</a><a href="#" data-nav="search" class="${this.currentPage === 'search' ? 'active' : ''}">Search</a><a href="#" data-nav="docs" class="${this.currentPage === 'docs' ? 'active' : ''}">Docs</a><a href="#" data-nav="logout">Logout</a>`;
     } else {
-      nav.innerHTML = \`<a href="#" data-nav="search" class="\${this.currentPage === 'search' ? 'active' : ''}">Search</a><a href="#" data-nav="docs" class="\${this.currentPage === 'docs' ? 'active' : ''}">Docs</a>\`;
+      nav.innerHTML = `<a href="#" data-nav="search" class="${this.currentPage === 'search' ? 'active' : ''}">Search</a><a href="#" data-nav="docs" class="${this.currentPage === 'docs' ? 'active' : ''}">Docs</a>`;
     }
   }
 
@@ -725,7 +219,7 @@ class VeritasApp {
       '    <button type="submit" class="btn btn-primary" style="width: 100%;">Login</button>',
       '  </form>',
   '  <div class="mt-2 text-center">',
-  '    <p class="text-muted">Don&#39;t have an account? <a href="#" id="request-account-link" class="text-primary" style="text-decoration: underline;">Request new account</a></p>',
+  "    <p class="text-muted">Don't have an account? <a href="#" id="request-account-link" class="text-primary" style="text-decoration: underline;">Request new account</a></p>",
   '  </div>',
       '</div>'
     ].join('');
@@ -743,7 +237,7 @@ class VeritasApp {
 
   renderDashboard() {
     const content = document.getElementById('content');
-    content.innerHTML = \`<div class="dashboard-stats"><div class="stat-card"><div class="stat-number" id="owned-count">-</div><div class="stat-label">Owned Assets</div></div><div class="stat-card"><div class="stat-number" id="created-count">-</div><div class="stat-label">Created Assets</div></div><div class="stat-card"><div class="stat-number">$25</div><div class="stat-label">Per Asset</div></div></div><div class="grid grid-2"><div class="card"><div class="card-header"><h3 class="card-title">Quick Actions</h3></div><div style="display: flex; gap: 1rem; flex-wrap: wrap;"><a href="#" data-nav="create-asset" class="btn btn-primary">Create New Asset</a><button id="invite-user" class="btn btn-secondary">Invite User</button></div></div><div class="card"><div class="card-header"><h3 class="card-title">Account Information</h3></div><p><strong>Email:</strong> \${this.currentUser.email}</p><p><strong>Account Type:</strong> \${this.currentUser.accountType}</p><p><strong>Member Since:</strong> \${new Date(this.currentUser.createdAt).toLocaleDateString()}</p></div></div><div class="card"><div class="card-header"><h3 class="card-title">Your Assets</h3></div><div id="user-assets" class="loading"><div class="spinner"></div></div></div>\`;
+    content.innerHTML = `<div class="dashboard-stats"><div class="stat-card"><div class="stat-number" id="owned-count">-</div><div class="stat-label">Owned Assets</div></div><div class="stat-card"><div class="stat-number" id="created-count">-</div><div class="stat-label">Created Assets</div></div><div class="stat-card"><div class="stat-number">$25</div><div class="stat-label">Per Asset</div></div></div><div class="grid grid-2"><div class="card"><div class="card-header"><h3 class="card-title">Quick Actions</h3></div><div style="display: flex; gap: 1rem; flex-wrap: wrap;"><a href="#" data-nav="create-asset" class="btn btn-primary">Create New Asset</a><button id="invite-user" class="btn btn-secondary">Invite User</button></div></div><div class="card"><div class="card-header"><h3 class="card-title">Account Information</h3></div><p><strong>Email:</strong> ${this.currentUser.email}</p><p><strong>Account Type:</strong> ${this.currentUser.accountType}</p><p><strong>Member Since:</strong> ${new Date(this.currentUser.createdAt).toLocaleDateString()}</p></div></div><div class="card"><div class="card-header"><h3 class="card-title">Your Assets</h3></div><div id="user-assets" class="loading"><div class="spinner"></div></div></div>`;
 
     this.loadUserAssets();
     document.getElementById('invite-user').addEventListener('click', () => this.showInviteModal());
@@ -798,7 +292,7 @@ class VeritasApp {
 
   renderSearch() {
     const content = document.getElementById('content');
-    content.innerHTML = \`<div class="card"><div class="card-header"><h2 class="card-title">Search Assets</h2><p class="card-subtitle">Explore publicly available legal documents</p></div><form id="search-form" style="display: flex; gap: 1rem; margin-bottom: 2rem;"><input type="text" id="search-query" class="input" placeholder="Search assets..." style="flex: 1;"><select id="search-type" class="select" style="width: 200px;"><option value="">All Types</option><option value="will">Will</option><option value="deed">Property Deed</option><option value="certificate">Certificate</option><option value="contract">Contract</option><option value="other">Other</option></select><button type="submit" class="btn btn-primary">Search</button></form></div><div id="search-results" class="grid grid-3"><!-- Search results will be populated here --></div>\`;
+    content.innerHTML = `<div class="card"><div class="card-header"><h2 class="card-title">Search Assets</h2><p class="card-subtitle">Explore publicly available legal documents</p></div><form id="search-form" style="display: flex; gap: 1rem; margin-bottom: 2rem;"><input type="text" id="search-query" class="input" placeholder="Search assets..." style="flex: 1;"><select id="search-type" class="select" style="width: 200px;"><option value="">All Types</option><option value="will">Will</option><option value="deed">Property Deed</option><option value="certificate">Certificate</option><option value="contract">Contract</option><option value="other">Other</option></select><button type="submit" class="btn btn-primary">Search</button></form></div><div id="search-results" class="grid grid-3"><!-- Search results will be populated here --></div>`;
 
     document.getElementById('search-form').addEventListener('submit', (e) => {
       e.preventDefault();
@@ -811,7 +305,7 @@ class VeritasApp {
 
   renderDocs() {
     const content = document.getElementById('content');
-    content.innerHTML = \`
+    content.innerHTML = `
       <div class="docs-container">
         <div class="docs-sidebar">
           <h3 class="docs-sidebar-title">📚 Documentation</h3>
@@ -831,13 +325,13 @@ class VeritasApp {
           </div>
         </div>
       </div>
-    \`;
+    `;
 
     // Add styles for docs page
     if (!document.getElementById('docs-styles')) {
       const style = document.createElement('style');
       style.id = 'docs-styles';
-      style.textContent = \`
+      style.textContent = `
         .docs-container {
           display: grid;
           grid-template-columns: 280px 1fr;
@@ -927,7 +421,7 @@ class VeritasApp {
             position: static;
           }
         }
-      \`;
+      `;
       document.head.appendChild(style);
     }
 
@@ -955,7 +449,7 @@ class VeritasApp {
     viewer.innerHTML = '<div class="loading">Loading documentation...</div>';
 
     try {
-      const response = await fetch(\`/api/docs/\${docName}\`);
+      const response = await fetch(`/api/docs/${docName}`);
       if (!response.ok) throw new Error('Failed to load documentation');
       
       const data = await response.json();
@@ -979,14 +473,14 @@ class VeritasApp {
     let html = markdown;
     
     // Code blocks first (to avoid conflicts)
-    const codeBlockRegex = /\`\`\`[\\s\\S]*?\`\`\`/g;
+    const codeBlockRegex = /```[\s\S]*?```/g;
     html = html.replace(codeBlockRegex, function(match) {
       const code = match.slice(3, -3).trim();
       return '<pre><code>' + code + '</code></pre>';
     });
     
     // Inline code
-    const inlineCodeRegex = /\`([^\`]+)\`/g;
+    const inlineCodeRegex = /`([^`]+)`/g;
     html = html.replace(inlineCodeRegex, '<code>$1</code>');
     
     // Headers
@@ -995,47 +489,47 @@ class VeritasApp {
     html = html.replace(/^# (.*$)/gim, '<h1>$1</h1>');
     
     // Bold and italic
-    const boldRegex = /\\*\\*(.*?)\\*\\*/g;
-    const italicRegex = /\\*(.*?)\\*/g;
+    const boldRegex = /\*\*(.*?)\*\*/g;
+    const italicRegex = /\*(.*?)\*/g;
     html = html.replace(boldRegex, '<strong>$1</strong>');
     html = html.replace(italicRegex, '<em>$1</em>');
     
     // Links - build regex from string to avoid escaping issues
-    const linkRegex = new RegExp('\\\\[([^\\\\]]+)\\\\]\\\\(([^)]+)\\\\)', 'g');
+    const linkRegex = new RegExp('\\[([^\\]]+)\\]\\(([^)]+)\\)', 'g');
     html = html.replace(linkRegex, function(match, text, url) {
       return '<a href="' + url + '" target="_blank" rel="noopener">' + text + '</a>';
     });
     
     // Lists
-    const bulletRegex = /^\\* (.*$)/gim;
-    const numberRegex = /^\\d+\\. (.*$)/gim;
-    const listWrapRegex = /(<li>.*<\\/li>\\n?)+/g;
+    const bulletRegex = /^\* (.*$)/gim;
+    const numberRegex = /^\d+\. (.*$)/gim;
+    const listWrapRegex = /(<li>.*<\/li>\n?)+/g;
     html = html.replace(bulletRegex, '<li>$1</li>');
     html = html.replace(numberRegex, '<li>$1</li>');
     html = html.replace(listWrapRegex, '<ul>$&</ul>');
     
     // Line breaks
-    html = html.replace(/\\n\\n/g, '</p><p>');
-    html = html.replace(/\\n/g, '<br>');
+    html = html.replace(/\n\n/g, '</p><p>');
+    html = html.replace(/\n/g, '<br>');
     
     // Wrap in paragraph
     html = '<p>' + html + '</p>';
     
     // Clean up
-    html = html.replace(/<p><\\/p>/g, '');
+    html = html.replace(/<p><\/p>/g, '');
     html = html.replace(/<p>(<h[1-6]>)/g, '$1');
-    html = html.replace(/(<\\/h[1-6]>)<\\/p>/g, '$1');
+    html = html.replace(/(<\/h[1-6]>)<\/p>/g, '$1');
     html = html.replace(/<p>(<pre>)/g, '$1');
-    html = html.replace(/(<\\/pre>)<\\/p>/g, '$1');
+    html = html.replace(/(<\/pre>)<\/p>/g, '$1');
     html = html.replace(/<p>(<ul>)/g, '$1');
-    html = html.replace(/(<\\/ul>)<\\/p>/g, '$1');
+    html = html.replace(/(<\/ul>)<\/p>/g, '$1');
     
     return html;
   }
 
   renderActivationPage(token) {
     const content = document.getElementById('content');
-    content.innerHTML = \`<div class="card" style="max-width: 500px; margin: 2rem auto;"><div class="card-header"><h2 class="card-title">Activate Your Account</h2><p class="card-subtitle">Complete your account setup</p></div><form id="activation-form"><div class="form-group"><label class="label" for="full-name">Full Name</label><input type="text" id="full-name" class="input" required></div><div class="form-group"><label class="label" for="date-of-birth">Date of Birth</label><input type="date" id="date-of-birth" class="input"></div><div class="form-group"><label class="label" for="address">Address</label><textarea id="address" class="textarea"></textarea></div><div class="form-group"><label class="label" for="phone">Phone Number</label><input type="tel" id="phone" class="input"></div><button type="submit" class="btn btn-primary" style="width: 100%;">Activate Account</button></form></div>\`;
+    content.innerHTML = `<div class="card" style="max-width: 500px; margin: 2rem auto;"><div class="card-header"><h2 class="card-title">Activate Your Account</h2><p class="card-subtitle">Complete your account setup</p></div><form id="activation-form"><div class="form-group"><label class="label" for="full-name">Full Name</label><input type="text" id="full-name" class="input" required></div><div class="form-group"><label class="label" for="date-of-birth">Date of Birth</label><input type="date" id="date-of-birth" class="input"></div><div class="form-group"><label class="label" for="address">Address</label><textarea id="address" class="textarea"></textarea></div><div class="form-group"><label class="label" for="phone">Phone Number</label><input type="tel" id="phone" class="input"></div><button type="submit" class="btn btn-primary" style="width: 100%;">Activate Account</button></form></div>`;
 
     document.getElementById('activation-form').addEventListener('submit', (e) => {
       e.preventDefault();
@@ -1169,7 +663,7 @@ class VeritasApp {
       if (result.success) {
         // Show success message with keys and important instructions
         const content = document.getElementById('content');
-        content.innerHTML = \`<div class="card" style="max-width: 700px; margin: 2rem auto;">
+        content.innerHTML = `<div class="card" style="max-width: 700px; margin: 2rem auto;">
           <div class="alert alert-success">
             <strong>✓ Account activated successfully!</strong>
           </div>
@@ -1189,7 +683,7 @@ class VeritasApp {
               <strong>Kyber Private Key (Encryption)</strong> 
               <span style="color: var(--error-color); font-weight: 600;"> (REQUIRED FOR LOGIN - SAVE THIS!)</span>
             </label>
-            <textarea class="textarea" rows="3" readonly style="font-family: monospace; font-size: 0.875rem; background-color: #fff3cd; border: 2px solid var(--warning-color);">\${keyPair.kyberPrivateKey}</textarea>
+            <textarea class="textarea" rows="3" readonly style="font-family: monospace; font-size: 0.875rem; background-color: #fff3cd; border: 2px solid var(--warning-color);">${keyPair.kyberPrivateKey}</textarea>
             <small class="text-muted">You must keep this safe to access your account. Copy it now!</small>
           </div>
 
@@ -1198,7 +692,7 @@ class VeritasApp {
               <strong>Dilithium Private Key (Signing)</strong> 
               <span style="color: var(--warning-color); font-weight: 600;"> (SAVE THIS TOO!)</span>
             </label>
-            <textarea class="textarea" rows="3" readonly style="font-family: monospace; font-size: 0.875rem; background-color: #fff3cd; border: 2px solid var(--warning-color);">\${keyPair.dilithiumPrivateKey}</textarea>
+            <textarea class="textarea" rows="3" readonly style="font-family: monospace; font-size: 0.875rem; background-color: #fff3cd; border: 2px solid var(--warning-color);">${keyPair.dilithiumPrivateKey}</textarea>
             <small class="text-muted">Used to sign blockchain transactions and prove your identity.</small>
           </div>
 
@@ -1207,7 +701,7 @@ class VeritasApp {
               <strong>Kyber Public Key</strong>
               <span style="color: var(--text-muted);"> (Used for encryption - stored on server)</span>
             </label>
-            <textarea class="textarea" rows="2" readonly style="font-family: monospace; font-size: 0.875rem;">\${keyPair.kyberPublicKey}</textarea>
+            <textarea class="textarea" rows="2" readonly style="font-family: monospace; font-size: 0.875rem;">${keyPair.kyberPublicKey}</textarea>
             <small class="text-muted">This key is stored on our servers and used to encrypt your documents.</small>
           </div>
 
@@ -1216,7 +710,7 @@ class VeritasApp {
               <strong>Dilithium Public Key</strong>
               <span style="color: var(--text-muted);"> (Used for verification - stored on blockchain)</span>
             </label>
-            <textarea class="textarea" rows="2" readonly style="font-family: monospace; font-size: 0.875rem;">\${keyPair.dilithiumPublicKey}</textarea>
+            <textarea class="textarea" rows="2" readonly style="font-family: monospace; font-size: 0.875rem;">${keyPair.dilithiumPublicKey}</textarea>
             <small class="text-muted">Used to verify your signatures on the Veritas blockchain.</small>
           </div>
 
@@ -1225,7 +719,7 @@ class VeritasApp {
               <strong>Recovery Phrase</strong>
               <span style="color: var(--text-secondary);"> (Optional backup - recommended)</span>
             </label>
-            <textarea class="textarea" rows="2" readonly style="font-family: monospace; font-size: 0.875rem;">\${result.data.recoveryPhrase}</textarea>
+            <textarea class="textarea" rows="2" readonly style="font-family: monospace; font-size: 0.875rem;">${result.data.recoveryPhrase}</textarea>
             <small class="text-muted">Additional recovery option. Store separately from your private keys.</small>
           </div>
 
@@ -1244,7 +738,7 @@ class VeritasApp {
           </div>
 
           <button id="continue-login" class="btn btn-primary" style="width: 100%;">Continue to Login</button>
-        </div>\`;
+        </div>`;
 
         document.getElementById('continue-login').addEventListener('click', () => {
           this.showSecurityWarningModal();
@@ -1364,12 +858,12 @@ class VeritasApp {
 
   async loadUserAssets() {
     try {
-      const response = await fetch(\`/api/assets/user/\${this.currentUser.id}\`);
+      const response = await fetch(`/api/assets/user/${this.currentUser.id}`);
       const result = await response.json();
       
       const container = document.getElementById('user-assets');
       if (result.success && result.data.assets.length > 0) {
-        container.innerHTML = result.data.assets.map(asset => \`<div class="asset-card"><div class="asset-type">\${asset.documentType}</div><div class="asset-title">\${asset.title}</div><div class="asset-description">\${asset.description}</div><div class="asset-meta"><span>Token: \${asset.tokenId}</span><span>\${new Date(asset.createdAt).toLocaleDateString()}</span></div></div>\`).join('');
+        container.innerHTML = result.data.assets.map(asset => `<div class="asset-card"><div class="asset-type">${asset.documentType}</div><div class="asset-title">${asset.title}</div><div class="asset-description">${asset.description}</div><div class="asset-meta"><span>Token: ${asset.tokenId}</span><span>${new Date(asset.createdAt).toLocaleDateString()}</span></div></div>`).join('');
         
         document.getElementById('owned-count').textContent = result.data.assets.filter(a => a.ownerId === this.currentUser.id).length;
         document.getElementById('created-count').textContent = result.data.assets.filter(a => a.creatorId === this.currentUser.id).length;
@@ -1395,11 +889,11 @@ class VeritasApp {
       if (query) params.append('q', query);
       if (type) params.append('type', type);
       
-      const response = await fetch(\`/api/search?\${params}\`);
+      const response = await fetch(`/api/search?${params}`);
       const result = await response.json();
       
       if (result.success && result.data.assets.length > 0) {
-        container.innerHTML = result.data.assets.map(asset => \`<div class="asset-card"><div class="asset-type">\${asset.documentType}</div><div class="asset-title">\${asset.title}</div><div class="asset-description">\${asset.description}</div><div class="asset-meta"><span>Token: \${asset.tokenId}</span><span>\${new Date(asset.createdAt).toLocaleDateString()}</span></div></div>\`).join('');
+        container.innerHTML = result.data.assets.map(asset => `<div class="asset-card"><div class="asset-type">${asset.documentType}</div><div class="asset-title">${asset.title}</div><div class="asset-description">${asset.description}</div><div class="asset-meta"><span>Token: ${asset.tokenId}</span><span>${new Date(asset.createdAt).toLocaleDateString()}</span></div></div>`).join('');
       } else {
         container.innerHTML = '<p class="text-center text-muted">No assets found matching your search criteria.</p>';
       }
@@ -1417,7 +911,7 @@ class VeritasApp {
   showSecurityWarningModal() {
     const modal = document.createElement('div');
     modal.className = 'modal';
-    modal.innerHTML = \`
+    modal.innerHTML = `
       <div class="modal-content">
         <div class="modal-header">
           <h3 class="modal-title">🔒 Important Security Information</h3>
@@ -1474,7 +968,7 @@ class VeritasApp {
           <button id="modal-confirm" class="btn btn-primary" disabled>I Understand - Proceed to Login</button>
         </div>
       </div>
-    \`;
+    `;
 
     document.body.appendChild(modal);
 
@@ -1506,7 +1000,7 @@ class VeritasApp {
   showInviteModal() {
     const modal = document.createElement('div');
     modal.className = 'modal';
-    modal.innerHTML = \`<div class="modal-content"><div class="modal-header"><h3 class="modal-title">Invite New User</h3><button class="modal-close" onclick="this.closest('.modal').remove()">&times;</button></div><div class="modal-body"><form id="invite-form"><div class="form-group"><label class="label" for="invite-email">Email Address</label><input type="email" id="invite-email" class="input" placeholder="user@example.com" required></div><div class="form-group"><label><input type="checkbox" id="invite-message"> Include personal message</label></div><div class="form-group" id="message-group" style="display: none;"><label class="label" for="invite-message-text">Personal Message (optional)</label><textarea id="invite-message-text" class="textarea" placeholder="Add a personal message to your invitation..."></textarea></div><button type="submit" class="btn btn-primary" style="width: 100%;">Send Invitation</button></form></div></div>\`;
+    modal.innerHTML = `<div class="modal-content"><div class="modal-header"><h3 class="modal-title">Invite New User</h3><button class="modal-close" onclick="this.closest('.modal').remove()">&times;</button></div><div class="modal-body"><form id="invite-form"><div class="form-group"><label class="label" for="invite-email">Email Address</label><input type="email" id="invite-email" class="input" placeholder="user@example.com" required></div><div class="form-group"><label><input type="checkbox" id="invite-message"> Include personal message</label></div><div class="form-group" id="message-group" style="display: none;"><label class="label" for="invite-message-text">Personal Message (optional)</label><textarea id="invite-message-text" class="textarea" placeholder="Add a personal message to your invitation..."></textarea></div><button type="submit" class="btn btn-primary" style="width: 100%;">Send Invitation</button></form></div></div>`;
 
     document.body.appendChild(modal);
     
@@ -1565,9 +1059,9 @@ class VeritasApp {
 
   sendInviteEmail(email, activationUrl, message) {
     const subject = 'You have been invited to join Veritas Documents';
-    const body = \`\${message ? message + '\\\\n\\\\n' : ''}You have been invited to join Veritas Documents, a secure platform for storing legal documents as NFTs.\\\\n\\\\nClick here to activate your account: \${activationUrl}\\\\n\\\\nThis invitation will expire in 7 days.\\\\n\\\\nBest regards,\\\\n\${this.currentUser.email}\`;
+    const body = `${message ? message + '\\n\\n' : ''}You have been invited to join Veritas Documents, a secure platform for storing legal documents as NFTs.\\n\\nClick here to activate your account: ${activationUrl}\\n\\nThis invitation will expire in 7 days.\\n\\nBest regards,\\n${this.currentUser.email}`;
 
-    const mailtoLink = \`mailto:\${email}?subject=\${encodeURIComponent(subject)}&body=\${encodeURIComponent(body)}\`;
+    const mailtoLink = `mailto:${email}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
     window.open(mailtoLink);
   }
 
@@ -1582,7 +1076,7 @@ class VeritasApp {
     if (existing) existing.remove();
 
     const alert = document.createElement('div');
-    alert.className = \`alert alert-\${type}\`;
+    alert.className = `alert alert-${type}`;
     alert.textContent = message;
     
     const content = document.getElementById('content');
@@ -1593,9 +1087,9 @@ class VeritasApp {
 
   openAccountRequestEmail() {
     const subject = 'Request for Veritas Documents Account';
-    const body = 'Hello,\\\\n\\\\nI would like to request an account for Veritas Documents.\\\\n\\\\nPlease provide me with an invitation link.\\\\n\\\\nThank you.';
+    const body = 'Hello,\\n\\nI would like to request an account for Veritas Documents.\\n\\nPlease provide me with an invitation link.\\n\\nThank you.';
 
-    const mailtoLink = \`mailto:admin@veritas-documents.com?subject=\${encodeURIComponent(subject)}&body=\${encodeURIComponent(body)}\`;
+    const mailtoLink = `mailto:admin@veritas-documents.com?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
     window.open(mailtoLink);
   }
 }
@@ -1603,133 +1097,4 @@ class VeritasApp {
 // Initialize the application
 document.addEventListener('DOMContentLoaded', () => {
   new VeritasApp();
-});`;
-
-  return c.text(js, 200, {
-    'Content-Type': 'application/javascript; charset=utf-8',
-    'Cache-Control': 'public, max-age=3600'
-  });
 });
-
-// API Routes
-import docsHandler from './handlers/docs';
-
-app.route('/api/auth', authHandler);
-app.route('/api/assets', assetHandler);
-app.route('/api/web3-assets', enhancedAssetHandler);
-app.route('/api/users', userHandler);
-app.route('/api/stripe', stripeHandler);
-app.route('/api/search', searchHandler);
-app.route('/api/docs', docsHandler);
-app.route('/api/vdc', vdcHandler);
-
-// HTML template for the SPA
-const appHTML = `
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Veritas Documents</title>
-    <link rel="stylesheet" href="/static/styles.css">
-</head>
-<body>
-    <div id="app">
-        <header class="header">
-            <div class="container">
-                <h1 class="logo">Veritas Documents</h1>
-                <nav class="nav" id="nav">
-                    <!-- Navigation will be populated by JavaScript -->
-                </nav>
-            </div>
-        </header>
-        
-        <main class="main">
-            <div class="container">
-                <div id="content">
-                    <!-- Content will be populated by JavaScript -->
-                </div>
-            </div>
-        </main>
-    </div>
-    
-  <script src="/static/app.bundle.js?v=2"></script>
-  <script src="/static/app.js?v=2"></script>
-</body>
-</html>
-`;
-
-// Serve the main application (SPA - handles client-side routing)
-app.get('/', (c) => c.html(appHTML));
-app.get('/activate', (c) => c.html(appHTML));
-app.get('/dashboard', (c) => c.html(appHTML));
-app.get('/create-asset', (c) => c.html(appHTML));
-app.get('/search', (c) => c.html(appHTML));
-app.get('/docs', (c) => c.html(appHTML));
-
-// Web3 Demo page - serve static demo file
-app.get('/demo', async (c) => {
-  const demoContent = `<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Veritas Documents - Web3 Demo</title>
-    <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 1200px; margin: 0 auto; padding: 20px; background: #f8fafc; }
-        .card { background: white; border-radius: 8px; padding: 24px; margin: 16px 0; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
-        .form-group { margin: 16px 0; }
-        label { display: block; margin-bottom: 8px; font-weight: 500; }
-        input, textarea, select { width: 100%; padding: 12px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 14px; }
-        button { background: #2563eb; color: white; padding: 12px 24px; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; margin: 8px; }
-        .btn-secondary { background: #6b7280; }
-        .status { padding: 12px; border-radius: 6px; margin: 16px 0; }
-        .success { background: #dcfce7; color: #166534; }
-        .error { background: #fef2f2; color: #dc2626; }
-        .info { background: #eff6ff; color: #1d4ed8; }
-        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
-        pre { background: #1f2937; color: #f9fafb; padding: 16px; border-radius: 6px; overflow-x: auto; font-size: 12px; }
-    </style>
-</head>
-<body>
-    <h1>🔐 Veritas Documents - Web3 Integration Demo</h1>
-    <p>Demonstrating IPFS storage and Ethereum anchoring with post-quantum cryptography</p>
-    <div class="card">
-        <h3>Web3 Integration Status</h3>
-        <p>✅ IPFS Client implemented with Cloudflare Gateway</p>
-        <p>✅ Ethereum Anchoring using Maatara post-quantum signatures</p>
-        <p>✅ Enhanced asset handlers with Web3 capabilities</p>
-        <p>🔧 Ready for testing with real credentials</p>
-        
-        <h4>Available Endpoints:</h4>
-        <ul>
-            <li><code>POST /api/web3-assets/create-web3</code> - Create asset with IPFS + Ethereum</li>
-            <li><code>GET /api/web3-assets/web3/:id</code> - Get asset with verification</li>
-            <li><code>POST /api/web3-assets/web3/:id/decrypt</code> - Decrypt content from IPFS</li>
-        </ul>
-        
-        <h4>Next Steps:</h4>
-        <ol>
-            <li>Configure Cloudflare Web3 Gateway credentials in wrangler.toml</li>
-            <li>Set up Ethereum network configuration</li>
-            <li>Test IPFS upload/retrieval functionality</li>
-            <li>Verify Ethereum anchoring process</li>
-        </ol>
-    </div>
-</body>
-</html>`;
-  
-  return c.html(demoContent);
-});
-
-// Health check
-app.get('/health', (c) => {
-  return c.json({ status: 'ok', timestamp: Date.now() });
-});
-
-// Catch-all for SPA routing
-app.get('*', (c) => {
-  return c.redirect('/');
-});
-
-export default app;

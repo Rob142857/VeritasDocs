@@ -5,6 +5,29 @@ import { initializeVDC, addUserToVDC } from '../utils/blockchain';
 
 const authHandler = new Hono<{ Bindings: Environment }>();
 
+const SESSION_TTL_MS = 12 * 60 * 60 * 1000; // 12 hours
+
+interface SessionRecord {
+  userId: string;
+  expiresAt: number;
+}
+
+async function createSession(env: Environment, userId: string): Promise<string> {
+  const sessionToken = crypto.randomUUID();
+  const expiresAt = Date.now() + SESSION_TTL_MS;
+
+  const record: SessionRecord = {
+    userId,
+    expiresAt,
+  };
+
+  await env.VERITAS_KV.put(`session:${sessionToken}`, JSON.stringify(record), {
+    expiration: Math.floor(expiresAt / 1000),
+  });
+
+  return sessionToken;
+}
+
 // Helper function to authenticate user from request headers
 async function authenticateUser(c: any): Promise<User | null> {
   const env = c.env;
@@ -15,36 +38,31 @@ async function authenticateUser(c: any): Promise<User | null> {
   }
   
   const token = authHeader.substring(7); // Remove 'Bearer ' prefix
-  
-  // For now, we'll use a simple token format: email:privateKey (base64 encoded)
-  // In production, this should be a proper JWT or session token
+
   try {
-    const decoded = atob(token);
-    const [email, privateKey] = decoded.split(':');
-    
-    if (!email || !privateKey) return null;
-    
-    // Get user ID from email
-    const userId = await env.VERITAS_KV.get(`user:email:${email}`);
-    if (!userId) return null;
-
-    // Get user data
-    const userData = await env.VERITAS_KV.get(`user:${userId}`);
-    if (!userData) return null;
-
-    const user: User = JSON.parse(userData);
-
-    // Verify the private key
-    if (user.encryptedPrivateData.startsWith('prod-encrypted-data-')) {
-      const expectedPrivateKey = user.encryptedPrivateData.replace('prod-encrypted-data-', '');
-      if (privateKey !== expectedPrivateKey) return null;
-    } else {
-      const maataraClient = new MaataraClient(env);
-      await maataraClient.decryptData(user.encryptedPrivateData, privateKey);
+    const sessionData = await env.VERITAS_KV.get(`session:${token}`);
+    if (!sessionData) {
+      return null;
     }
-    
-    return user;
+
+    const session: SessionRecord = JSON.parse(sessionData);
+    if (!session || !session.userId) {
+      return null;
+    }
+
+    if (session.expiresAt < Date.now()) {
+      await env.VERITAS_KV.delete(`session:${token}`);
+      return null;
+    }
+
+    const userData = await env.VERITAS_KV.get(`user:${session.userId}`);
+    if (!userData) {
+      return null;
+    }
+
+    return JSON.parse(userData) as User;
   } catch (error) {
+    console.error('Session authentication error:', error);
     return null;
   }
 }
@@ -299,11 +317,13 @@ authHandler.post('/activate', async (c) => {
       id: userId,
       email: oneTimeLink.email,
       publicKey: kyberPublicKey, // Kyber public key for encryption
+      dilithiumPublicKey,
       encryptedPrivateData: JSON.stringify({
         recoveryPhrase, // Only recovery phrase stored here
         blockchainTxId: txId, // Reference to blockchain transaction
         dilithiumPublicKey // For signature verification
       }),
+      blockchainTxId: txId,
       createdAt: Date.now(),
       invitedBy: oneTimeLink.inviteType === 'user' ? oneTimeLink.createdBy : undefined,
       hasActivated: true,
@@ -342,19 +362,21 @@ authHandler.post('/activate', async (c) => {
 authHandler.post('/login', async (c) => {
   try {
     const env = c.env;
-    const { email, privateKey } = await c.req.json();
+    const { email, signature, timestamp } = await c.req.json();
 
-    if (!email || !privateKey) {
-      return c.json<APIResponse>({ success: false, error: 'Email and private key are required' }, 400);
+    if (!email || !signature || !timestamp) {
+      return c.json<APIResponse>({ success: false, error: 'Email, signature, and timestamp are required' }, 400);
     }
 
-    // Get user ID from email
+    if (Math.abs(Date.now() - Number(timestamp)) > 5 * 60 * 1000) {
+      return c.json<APIResponse>({ success: false, error: 'Login request timestamp is invalid or expired' }, 400);
+    }
+
     const userId = await env.VERITAS_KV.get(`user:email:${email}`);
     if (!userId) {
       return c.json<APIResponse>({ success: false, error: 'User not found' }, 404);
     }
 
-    // Get user data
     const userData = await env.VERITAS_KV.get(`user:${userId}`);
     if (!userData) {
       return c.json<APIResponse>({ success: false, error: 'User data not found' }, 404);
@@ -362,71 +384,57 @@ authHandler.post('/login', async (c) => {
 
     const user: User = JSON.parse(userData);
 
-    // THE KEY VERIFICATION: Try to decrypt the encrypted user data with the provided Kyber private key
-    // If decryption succeeds, the user has the correct private key (zero-knowledge proof!)
-    
-    // Look up the user's VDC blockchain transaction ID (stored during activation)
-    const vdcTxId = await env.VERITAS_KV.get(`vdc:user:${userId}`);
+    const vdcTxId = user.blockchainTxId || await env.VERITAS_KV.get(`vdc:user:${userId}`);
     if (!vdcTxId) {
       console.error(`VDC transaction not found for user ${userId}`);
       return c.json<APIResponse>({ success: false, error: 'User blockchain registration not found' }, 500);
     }
 
-    // Get the VDC transaction from KV
-    const vdcTxData = await env.VERITAS_KV.get(`vdc:tx:${vdcTxId}`);
-    if (!vdcTxData) {
+    const vdc = await initializeVDC(env);
+    const vdcTx = await vdc.getTransaction(vdcTxId);
+    if (!vdcTx) {
       console.error(`VDC transaction data not found: ${vdcTxId}`);
       return c.json<APIResponse>({ success: false, error: 'Blockchain transaction data not found' }, 500);
     }
 
-    const vdcTx = JSON.parse(vdcTxData);
-
-    // Extract the encrypted user data from the transaction payload (data field for user_registration type)
     const encryptedUserData = vdcTx.data?.encryptedUserData;
     if (!encryptedUserData) {
       console.error(`Encrypted user data not found in VDC transaction ${vdcTxId}`);
       return c.json<APIResponse>({ success: false, error: 'Encrypted user data not found in blockchain' }, 500);
     }
 
-    // Attempt to decrypt with the provided private key
-    try {
-      const maataraClient = new MaataraClient(env);
-      const decryptedData = await maataraClient.decryptData(
-        encryptedUserData,
-        privateKey
-      );
-      
-      // Parse decrypted data to verify it's valid JSON
-      const parsedData = JSON.parse(decryptedData);
-      
-      // Verify the email matches (additional security check)
-      if (parsedData.email !== email) {
-        console.error('Email mismatch:', { expected: email, got: parsedData.email });
-        return c.json<APIResponse>({ success: false, error: 'Email mismatch - invalid credentials' }, 401);
-      }
-      
-      // Login successful! User proved they have the correct Kyber private key by decrypting their data
-      console.log(`✅ Login successful for user ${userId} (${email})`);
-      
-      return c.json<APIResponse>({
-        success: true,
-        data: {
-          user,
-          vdcTransactionId: vdcTxId,
-          accountType: user.accountType,
-          decryptedUserData: parsedData // Return decrypted personal data to client
-        },
-        message: 'Login successful - zero-knowledge proof verified',
-      });
-      
-    } catch (error) {
-      console.error('Decryption verification failed:', error);
-      // If decryption fails, the Kyber private key is incorrect
-      return c.json<APIResponse>({ 
-        success: false, 
-        error: 'Invalid private key - could not decrypt your data' 
-      }, 401);
+    const dilithiumPublicKey = vdcTx.data?.dilithiumPublicKey || user.dilithiumPublicKey;
+    if (!dilithiumPublicKey) {
+      console.error('Dilithium public key missing for user', userId);
+      return c.json<APIResponse>({ success: false, error: 'Public key not available for signature verification' }, 500);
     }
+
+    const maataraClient = new MaataraClient(env);
+    const challenge = `login:${email}:${timestamp}`;
+    const isValid = await maataraClient.verifySignature(challenge, signature, dilithiumPublicKey);
+
+    if (!isValid) {
+      console.error('Invalid signature for user', userId);
+      return c.json<APIResponse>({ success: false, error: 'Signature verification failed' }, 401);
+    }
+
+    const sessionToken = await createSession(env, userId);
+
+    console.log(`✅ Login successful for user ${userId} (${email})`);
+
+    return c.json<APIResponse>({
+      success: true,
+      data: {
+        user,
+        vdcTransactionId: vdcTxId,
+        accountType: user.accountType,
+        encryptedUserData,
+        sessionToken,
+        dilithiumPublicKey,
+        kyberPublicKey: user.publicKey
+      },
+      message: 'Login successful - zero-knowledge proof verified',
+    });
   } catch (error) {
     console.error('Error during login:', error);
     return c.json<APIResponse>({ success: false, error: 'Internal server error' }, 500);

@@ -3,7 +3,9 @@ export interface User {
   id: string;
   email: string;
   publicKey: string;
+  dilithiumPublicKey: string;
   encryptedPrivateData: string; // Kyber-encrypted user details
+  blockchainTxId?: string;
   createdAt: number;
   invitedBy?: string;
   hasActivated: boolean;

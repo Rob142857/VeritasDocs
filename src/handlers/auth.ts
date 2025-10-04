@@ -208,6 +208,58 @@ authHandler.post('/create-link', async (c) => {
   }
 });
 
+// Admin endpoint - uses stored ADMIN_SECRET_KEY from environment
+authHandler.post('/create-link-admin', async (c) => {
+  try {
+    const env = c.env;
+    const { email, adminKey } = await c.req.json();
+
+    console.log(`🔐 Admin endpoint called for email: ${email}`);
+    
+    // Verify the provided adminKey matches the stored ADMIN_SECRET_KEY
+    if (!adminKey || adminKey !== env.ADMIN_SECRET_KEY) {
+      console.log('❌ Unauthorized: Invalid admin key');
+      return c.json<APIResponse>({ success: false, error: 'Unauthorized' }, 401);
+    }
+
+    if (!email) {
+      return c.json<APIResponse>({ success: false, error: 'Email is required' }, 400);
+    }
+
+    const linkId = generateId();
+    const token = crypto.randomUUID();
+    const expiresAt = Date.now() + (7 * 24 * 60 * 60 * 1000); // 7 days
+
+    const oneTimeLink: OneTimeLink = {
+      id: linkId,
+      token,
+      createdBy: 'admin',
+      inviteType: 'admin',
+      email,
+      expiresAt,
+      used: false,
+    };
+
+    await env.VERITAS_KV.put(`link:${token}`, JSON.stringify(oneTimeLink));
+
+    const activationUrl = `${c.req.url.split('/api')[0]}/activate?token=${token}`;
+
+    console.log(`✅ Activation link created successfully`);
+
+    return c.json<APIResponse>({
+      success: true,
+      data: { activationUrl, expiresAt, token },
+      message: 'One-time activation link created successfully',
+    });
+  } catch (error) {
+    console.error('❌ Error in create-link-admin:', error);
+    return c.json<APIResponse>({ 
+      success: false, 
+      error: error instanceof Error ? error.message : 'Internal server error' 
+    }, 500);
+  }
+});
+
 // Send invitation to create account (user endpoint)
 authHandler.post('/send-invite', async (c) => {
   try {

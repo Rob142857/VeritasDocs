@@ -27,6 +27,11 @@ export interface Asset {
   updatedAt: number;
   isPubliclySearchable: boolean;
   publicMetadata?: Record<string, any>;
+  // Payment and VDC status
+  paymentStatus?: 'pending' | 'completed' | 'failed';
+  stripeSessionId?: string;
+  vdcTransactionId?: string; // ID of VDC transaction after payment
+  vdcBlockNumber?: number; // Block number where asset was registered
   // Web3 integration
   merkleRoot?: string; // Ethereum Merkle root hash
   ethereumTxHash?: string; // Transaction hash on Ethereum

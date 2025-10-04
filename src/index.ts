@@ -19,8 +19,159 @@ const app = new Hono<{ Bindings: Bindings }>();
 app.use('*', cors({
   origin: ['https://veritas-documents.workers.dev', 'http://localhost:8787'],
   allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowHeaders: ['Content-Type', 'Authorization'],
+  allowHeaders: ['Content-Type', 'Authorization', 'stripe-signature'],
 }));
+
+// Special handling for Stripe webhook - MUST come before any body parsing middleware
+// This intercepts the request and handles it directly to preserve the raw body
+app.post('/api/stripe/webhook', async (c) => {
+  try {
+    const env = c.env;
+    const req = c.req.raw;
+    const signature = req.headers.get('stripe-signature');
+    
+    if (!signature) {
+      console.error('Missing Stripe signature header');
+      return c.json({ success: false, error: 'Missing signature' }, 400);
+    }
+
+    // Clone the request to read the body without consuming it
+    const clonedReq = req.clone();
+    const body = await clonedReq.text();
+
+    console.log('Webhook received - signature:', signature.substring(0, 20) + '...');
+    console.log('Body length:', body.length);
+    console.log('Secret exists:', !!env.STRIPE_WEBHOOK_SECRET);
+    console.log('Secret prefix:', env.STRIPE_WEBHOOK_SECRET?.substring(0, 10));
+
+    const Stripe = (await import('stripe')).default;
+    const stripe = new Stripe(env.STRIPE_SECRET_KEY, {
+      apiVersion: '2023-10-16',
+    });
+
+    let event;
+    try {
+      // Use async version for Cloudflare Workers
+      event = await stripe.webhooks.constructEventAsync(body, signature, env.STRIPE_WEBHOOK_SECRET);
+      console.log('✅ Webhook signature verified successfully, event type:', event.type);
+    } catch (err: any) {
+      console.error('❌ Webhook signature verification failed:', err.message);
+      console.error('Error details:', JSON.stringify(err, null, 2));
+      return c.json({ success: false, error: 'Invalid signature' }, 400);
+    }
+
+    // Handle checkout.session.completed event
+    if (event.type === 'checkout.session.completed') {
+      const session = event.data.object as any;
+      
+      console.log('Checkout session completed:', session.id);
+      
+      const assetId = session.metadata?.assetId;
+      const userId = session.metadata?.userId;
+      
+      if (!assetId || !userId) {
+        console.error('Missing assetId or userId in session metadata');
+        return c.json({ success: false, error: 'Invalid session metadata' }, 400);
+      }
+
+      // Get asset from KV
+      const assetData = await env.VERITAS_KV.get(`asset:${assetId}`);
+      if (!assetData) {
+        console.error('Asset not found:', assetId);
+        return c.json({ success: false, error: 'Asset not found' }, 404);
+      }
+
+      const asset = JSON.parse(assetData);
+      
+      // Update asset payment status
+      asset.paymentStatus = 'completed';
+      asset.paidAt = Date.now();
+      await env.VERITAS_KV.put(`asset:${assetId}`, JSON.stringify(asset));
+
+      // Move asset from pending to owned
+      const userPendingAssetsKey = `user_pending_assets:${userId}`;
+      const userAssetsKey = `user_assets:${userId}`;
+      
+      const pendingAssets = await env.VERITAS_KV.get(userPendingAssetsKey);
+      if (pendingAssets) {
+        const pendingList = JSON.parse(pendingAssets);
+        const updatedPending = pendingList.filter((id: string) => id !== assetId);
+        await env.VERITAS_KV.put(userPendingAssetsKey, JSON.stringify(updatedPending));
+      }
+      
+      const ownedAssets = await env.VERITAS_KV.get(userAssetsKey);
+      const ownedList = ownedAssets ? JSON.parse(ownedAssets) : [];
+      ownedList.push(assetId);
+      await env.VERITAS_KV.put(userAssetsKey, JSON.stringify(ownedList));
+
+      // Create VDC transaction for asset registration
+      console.log('Creating VDC transaction for asset:', assetId);
+      
+      const userData = await env.VERITAS_KV.get(`user:${userId}`);
+      if (!userData) {
+        console.error('User not found:', userId);
+        return c.json({ success: false, error: 'User not found' }, 404);
+      }
+      
+      const user = JSON.parse(userData);
+      
+      // Create VDC transaction
+      const vdcTransactionId = `vdc_tx_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      const vdcTransaction = {
+        id: vdcTransactionId,
+        type: 'asset_creation',
+        timestamp: Date.now(),
+        data: {
+          assetId: asset.id,
+          tokenId: asset.tokenId,
+          ownerId: asset.ownerId,
+          creatorId: asset.creatorId,
+          title: asset.title,
+          description: asset.description,
+          documentType: asset.documentType,
+          ipfsHash: asset.ipfsHash,
+          ipfsMetadataHash: asset.ipfsMetadataHash,
+          merkleRoot: asset.merkleRoot,
+          ethereumTxHash: asset.ethereumTxHash,
+          stripeSessionId: session.id,
+          paidAmount: session.amount_total ? session.amount_total / 100 : 25,
+          createdAt: asset.createdAt,
+        },
+        signatures: {
+          user: {
+            publicKey: user.dilithiumPublicKey,
+            signature: asset.signature,
+          },
+          system: {
+            publicKey: env.SYSTEM_DILITHIUM_PUBLIC_KEY,
+            signature: '',
+          },
+        },
+      };
+
+      // Store with VDC standard prefix: vdc:pending:{id} (same as user registration)
+      await env.VERITAS_KV.put(`vdc:pending:${vdcTransactionId}`, JSON.stringify(vdcTransaction));
+      
+      // Update pending count (VDC standard)
+      const currentCountStr = await env.VERITAS_KV.get('vdc:pending:count');
+      const currentCount = parseInt(currentCountStr || '0', 10);
+      const pendingCount = Number.isNaN(currentCount) ? 1 : currentCount + 1;
+      await env.VERITAS_KV.put('vdc:pending:count', pendingCount.toString());
+
+      asset.vdcTransactionId = vdcTransactionId;
+      await env.VERITAS_KV.put(`asset:${assetId}`, JSON.stringify(asset));
+
+      console.log('✅ VDC transaction created and pending mining:', vdcTransactionId);
+      console.log('✅ Pending count:', pendingCount);
+      console.log('✅ Asset payment completed - pending VDC mining for:', user.email);
+    }
+
+    return c.json({ success: true, message: 'Webhook processed' });
+  } catch (error: any) {
+    console.error('Error processing webhook:', error);
+    return c.json({ success: false, error: error.message || 'Internal server error' }, 500);
+  }
+});
 
 // Serve static files
 app.get('/static/styles.css', async (c) => {
@@ -255,43 +406,49 @@ body {
 .asset-card {
   background-color: var(--background);
   border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 1.5rem;
-  transition: box-shadow 0.2s;
+  border-radius: 6px;
+  padding: 0.875rem;
+  margin-bottom: 0.75rem;
+  transition: all 0.2s ease;
 }
 
 .asset-card:hover {
-  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15);
+  transform: translateY(-2px);
+  border-color: var(--primary-color);
 }
 
 .asset-type {
   display: inline-block;
-  padding: 0.25rem 0.75rem;
+  padding: 0.2rem 0.5rem;
   background-color: var(--surface);
-  border-radius: 4px;
-  font-size: 0.75rem;
+  border-radius: 3px;
+  font-size: 0.7rem;
   font-weight: 500;
   text-transform: uppercase;
-  margin-bottom: 0.5rem;
+  margin-bottom: 0.4rem;
 }
 
 .asset-title {
-  font-size: 1.125rem;
+  font-size: 0.95rem;
   font-weight: 600;
-  margin-bottom: 0.5rem;
+  margin-bottom: 0.3rem;
 }
 
 .asset-description {
   color: var(--text-secondary);
-  margin-bottom: 1rem;
+  margin-bottom: 0.6rem;
+  font-size: 0.85rem;
 }
 
 .asset-meta {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  font-size: 0.875rem;
+  font-size: 0.75rem;
   color: var(--text-muted);
+  flex-wrap: wrap;
+  gap: 0.5rem;
 }
 
 /* Dashboard */
@@ -453,6 +610,146 @@ body {
   line-height: 1.5;
 }
 
+/* Progress modal */
+.progress-modal {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background-color: rgba(0, 0, 0, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10000;
+}
+
+.progress-modal-content {
+  background-color: var(--background);
+  border-radius: 12px;
+  padding: 2rem;
+  text-align: center;
+  min-width: 300px;
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.3);
+}
+
+.progress-spinner {
+  width: 50px;
+  height: 50px;
+  border: 4px solid var(--border);
+  border-top-color: var(--primary-color);
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+  margin: 0 auto 1rem;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.progress-modal-title {
+  font-size: 1.125rem;
+  font-weight: 600;
+  margin-bottom: 0.5rem;
+  color: var(--text-primary);
+}
+
+.progress-modal-message {
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+}
+
+/* Modal styles */
+.modal {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background-color: rgba(0, 0, 0, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+  animation: fadeIn 0.2s ease-in-out;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.modal-content {
+  background-color: var(--background);
+  border-radius: 12px;
+  max-width: 90%;
+  max-height: 90vh;
+  overflow: hidden;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
+  animation: slideDown 0.3s ease-out;
+}
+
+@keyframes slideDown {
+  from {
+    transform: translateY(-50px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+.modal-header {
+  padding: 1.5rem;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.modal-title {
+  margin: 0;
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.modal-close {
+  background: none;
+  border: none;
+  font-size: 1.5rem;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 0;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  transition: all 0.2s;
+}
+
+.modal-close:hover {
+  background-color: var(--surface);
+  color: var(--text-primary);
+}
+
+.modal-body {
+  padding: 1.5rem;
+  max-height: calc(90vh - 160px);
+  overflow-y: auto;
+}
+
+.modal-footer {
+  padding: 1rem 1.5rem;
+  border-top: 1px solid var(--border);
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
 /* Utility classes */
 .hidden { display: none !important; }
 .text-center { text-align: center; }
@@ -472,25 +769,22 @@ body {
 // Serve bundled frontend application from KV or inline
 app.get('/static/app.bundle.js', async (c) => {
   try {
-    // Try to load from KV first
+    // Try to load from KV first (production-ready Maatara PQC bundle)
     const env = c.env as Environment;
-    let bundle = await env.VERITAS_KV.get('frontend-bundle');
-    if (!bundle) {
-      // Fallback to legacy key name used in some manual uploads
-      bundle = await env.VERITAS_KV.get('app-bundle');
-    }
+    let bundle = await env.VERITAS_KV.get('app-bundle');
+    
     if (bundle) {
-      // Check if the bundle contains hashData function
-      if (bundle.includes('hashData')) {
-        return c.text(bundle, 200, { 
-          'Content-Type': 'application/javascript',
-          'Cache-Control': 'no-cache, no-store, must-revalidate',
-          'ETag': `"app-bundle-v7-${Date.now()}"`,
-        });
-      }
+      console.log('✅ Serving real Maatara PQC bundle from KV (size:', bundle.length, 'bytes)');
+      return c.text(bundle, 200, { 
+        'Content-Type': 'application/javascript',
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
+        'ETag': `"app-bundle-v10-${Date.now()}"`,
+      });
+    } else {
+      console.warn('⚠️ app-bundle not found in KV, falling back to error bundle');
     }
   } catch (error) {
-    console.error('Failed to load bundle from KV:', error);
+    console.error('❌ Failed to load bundle from KV:', error);
   }
 
   // Fallback: serve simple bundle with hashData function
@@ -512,37 +806,37 @@ app.get('/static/app.bundle.js', async (c) => {
   // Merge hashData into existing VeritasCrypto object instead of replacing it
   if (window.VeritasCrypto) {
     window.VeritasCrypto.hashData = hashData;
-    console.log("Added hashData function to existing VeritasCrypto module");
+    console.log("✅ Added hashData function to existing VeritasCrypto module");
   } else {
-    // Fallback: create the object if it doesn't exist
+    // ERROR: Real crypto bundle didn't load!
+    console.error("❌ CRITICAL: Post-quantum crypto bundle failed to load!");
+    console.error("The app.bundle.js file must load before this script.");
     window.VeritasCrypto = {
-      encryptDocumentData: async function(data, publicKeyB64u) {
-        return JSON.stringify({ encrypted: data, key: publicKeyB64u });
+      encryptDocumentData: async function() {
+        throw new Error("PQC bundle not loaded - cannot encrypt data");
       },
-      decryptDocumentData: async function(encryptedData, privateKeyB64u) {
-        const data = JSON.parse(encryptedData);
-        return data.encrypted;
+      decryptDocumentData: async function() {
+        throw new Error("PQC bundle not loaded - cannot decrypt data");
       },
       generateClientKeypair: async function() {
-        return {
-          kyberPublicKey: 'test-public-key',
-          kyberPrivateKey: 'test-private-key',
-          dilithiumPublicKey: 'test-dilithium-public',
-          dilithiumPrivateKey: 'test-dilithium-private'
-        };
+        throw new Error("PQC bundle not loaded - cannot generate keypair. Check browser console for errors.");
       },
-      signData: async function(data, privateKey) {
-        return 'test-signature-' + data.length;
+      signData: async function() {
+        throw new Error("PQC bundle not loaded - cannot sign data");
       },
-      verifySignature: async function(data, signature, publicKey) {
-        return true;
+      verifySignature: async function() {
+        throw new Error("PQC bundle not loaded - cannot verify signature");
       },
       ensureCryptoReady: async function() {
-        console.log('✓ Post-quantum cryptography initialized');
+        throw new Error("PQC bundle failed to load - cannot initialize cryptography");
       },
       hashData: hashData
     };
-    console.log("Veritas Crypto module loaded");
+    // Show user-friendly error in UI
+    const alertDiv = document.createElement('div');
+    alertDiv.style.cssText = 'position:fixed;top:20px;left:50%;transform:translateX(-50%);background:#dc2626;color:white;padding:20px;border-radius:8px;z-index:9999;max-width:600px;';
+    alertDiv.innerHTML = '<strong>⚠️ Cryptography Module Failed to Load</strong><br>Please refresh the page. If this persists, clear your browser cache.';
+    document.body.appendChild(alertDiv);
   }
 })();
 `;
@@ -692,6 +986,15 @@ class VeritasApp {
           this.currentPage = 'docs';
           this.renderDocs();
           break;
+        case '/admin':
+          if (this.currentUser.accountType === 'admin') {
+            this.currentPage = 'admin';
+            this.renderAdmin();
+          } else {
+            this.currentPage = 'dashboard';
+            this.renderDashboard();
+          }
+          break;
         default:
           this.currentPage = 'dashboard';
           this.renderDashboard();
@@ -743,6 +1046,9 @@ class VeritasApp {
       case 'docs':
         path = '/docs';
         break;
+      case 'admin':
+        path = '/admin';
+        break;
       case 'logout':
         this.logout();
         return;
@@ -757,7 +1063,9 @@ class VeritasApp {
     if (!nav) return;
 
     if (this.currentUser) {
-      nav.innerHTML = \`<a href="#" data-nav="dashboard" class="\${this.currentPage === 'dashboard' ? 'active' : ''}">Dashboard</a><a href="#" data-nav="create-asset" class="\${this.currentPage === 'create-asset' ? 'active' : ''}">Create Asset</a><a href="#" data-nav="search" class="\${this.currentPage === 'search' ? 'active' : ''}">Search</a><a href="#" data-nav="docs" class="\${this.currentPage === 'docs' ? 'active' : ''}">Docs</a><a href="#" data-nav="logout">Logout</a>\`;
+      const isAdmin = this.currentUser.accountType === 'admin';
+      const adminLink = isAdmin ? \`<a href="#" data-nav="admin" class="\${this.currentPage === 'admin' ? 'active' : ''}" style="color: #f59e0b;">⚙️ Admin</a>\` : '';
+      nav.innerHTML = \`<a href="#" data-nav="dashboard" class="\${this.currentPage === 'dashboard' ? 'active' : ''}">Dashboard</a><a href="#" data-nav="create-asset" class="\${this.currentPage === 'create-asset' ? 'active' : ''}">Register Document</a><a href="#" data-nav="search" class="\${this.currentPage === 'search' ? 'active' : ''}">Search</a><a href="#" data-nav="docs" class="\${this.currentPage === 'docs' ? 'active' : ''}">Docs</a>\${adminLink}<a href="#" data-nav="logout">Logout</a>\`;
     } else {
       nav.innerHTML = \`<a href="#" data-nav="search" class="\${this.currentPage === 'search' ? 'active' : ''}">Search</a><a href="#" data-nav="docs" class="\${this.currentPage === 'docs' ? 'active' : ''}">Docs</a>\`;
     }
@@ -816,8 +1124,8 @@ class VeritasApp {
     content.innerHTML = [
       '<div class="card" style="max-width: 600px; margin: 0 auto;">',
       '  <div class="card-header">',
-      '    <h2 class="card-title">Create New Asset</h2>',
-      '    <p class="card-subtitle">Store your legal document as an NFT ($25 fee)</p>',
+      '    <h2 class="card-title">Register New Document</h2>',
+      '    <p class="card-subtitle">Store your legal document as an NFT on the blockchain ($25 fee)</p>',
       '  </div>',
       '  <form id="create-asset-form">',
       '    <div class="form-group">',
@@ -844,10 +1152,10 @@ class VeritasApp {
       '      <input type="file" id="document-file" class="input" required>',
       '    </div>',
       '    <div class="form-group">',
-      '      <label><input type="checkbox" id="public-searchable"> Make this asset publicly searchable</label>',
+      '      <label><input type="checkbox" id="public-searchable"> Make this document publicly searchable</label>',
       '    </div>',
       '    <p style="font-size: 0.85rem; color: #64748b; margin-bottom: 1rem;">Your document is encrypted locally and signed with your Dilithium key before upload.</p>',
-      '    <button type="submit" class="btn btn-primary" style="width: 100%;">Create Asset ($25)</button>',
+      '    <button type="submit" class="btn btn-primary" style="width: 100%;">Register Document ($25)</button>',
       '  </form>',
       '</div>'
     ].join('');
@@ -1172,7 +1480,14 @@ class VeritasApp {
       phoneNumber: document.getElementById('phone').value,
     };
 
+    let progressModal;
     try {
+      // Show progress modal
+      progressModal = this.showProgressModal(
+        'Activating Account',
+        'Generating post-quantum cryptographic keys...'
+      );
+
       // Initialize Post-Quantum Cryptography
       console.log('Initializing PQC for key generation...');
       await window.VeritasCrypto.ensureCryptoReady();
@@ -1181,6 +1496,9 @@ class VeritasApp {
       console.log('Generating post-quantum keypairs...');
       const keyPair = await window.VeritasCrypto.generateClientKeypair();
       console.log('Keypairs generated successfully');
+      
+      // Update progress message
+      progressModal.querySelector('.progress-modal-message').textContent = 'Encrypting personal information...';
       
       // Get email from activation form (should be pre-filled or from token)
       const email = document.getElementById('email')?.value || '';
@@ -1201,6 +1519,9 @@ class VeritasApp {
       );
       console.log('User data encrypted');
       
+      // Update progress message
+      progressModal.querySelector('.progress-modal-message').textContent = 'Signing blockchain transaction...';
+      
       // Sign the blockchain transaction with Dilithium private key
       console.log('Signing blockchain transaction...');
       const blockData = {
@@ -1215,6 +1536,9 @@ class VeritasApp {
       );
       console.log('Transaction signed');
 
+      // Update progress message
+      progressModal.querySelector('.progress-modal-message').textContent = 'Finalizing activation...';
+
       const response = await fetch('/api/auth/activate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1228,6 +1552,10 @@ class VeritasApp {
       });
 
       const result = await response.json();
+      
+      // Hide progress modal
+      this.hideProgressModal();
+      
       if (result.success) {
         // Show success message with keys and important instructions
         const content = document.getElementById('content');
@@ -1315,6 +1643,7 @@ class VeritasApp {
         this.showAlert('error', result.error || 'Activation failed');
       }
     } catch (error) {
+      this.hideProgressModal();
       console.error('Activation error:', error);
       this.showAlert('error', 'Error: ' + error.message);
     }
@@ -1329,7 +1658,7 @@ class VeritasApp {
 
     // Check if user is logged in
     if (!this.currentUser) {
-      this.showAlert('error', 'You must be logged in to create assets. Please log in again.');
+      this.showAlert('error', 'You must be logged in to register documents. Please log in again.');
       this.navigateTo('login');
       return;
     }
@@ -1375,6 +1704,7 @@ class VeritasApp {
     const reader = new FileReader();
 
     reader.onload = async (e) => {
+      let progressModal;
       try {
         const documentContent = e.target.result;
         if (!documentContent) {
@@ -1382,12 +1712,21 @@ class VeritasApp {
           return;
         }
         
+        // Show progress modal
+        progressModal = this.showProgressModal(
+          'Creating Asset',
+          'Initializing post-quantum cryptography...'
+        );
+        
         console.log('Document loaded, size:', documentContent.length);
 
         // Wait for Post-Quantum Cryptography to initialize
         console.log('Initializing PQC...');
         await window.VeritasCrypto.ensureCryptoReady();
         console.log('PQC ready');
+
+        // Update progress
+        progressModal.querySelector('.progress-modal-message').textContent = 'Encrypting document with post-quantum encryption...';
 
         // Encrypt the document client-side with Post-Quantum Cryptography
         console.log('Encrypting document...');
@@ -1400,6 +1739,9 @@ class VeritasApp {
           kyberKey
         );
         console.log('Document encrypted, creating signature...');
+
+        // Update progress
+        progressModal.querySelector('.progress-modal-message').textContent = 'Preparing cryptographic signature...';
 
         // Create signature payload with document hash instead of full content
         const documentHash = await window.VeritasCrypto.hashData(encryptedData);
@@ -1416,6 +1758,9 @@ class VeritasApp {
 
         console.log('Creating signature for payload length:', signaturePayload.length);
         const signature = await window.VeritasCrypto.signData(signaturePayload, dilithiumKey);
+
+        // Update progress
+        progressModal.querySelector('.progress-modal-message').textContent = 'Uploading encrypted package to secure storage...';
 
         const response = await fetch('/api/web3-assets/create-web3', {
           method: 'POST',
@@ -1444,16 +1789,21 @@ class VeritasApp {
         }
 
         const result = await response.json();
+        
+        // Hide progress modal
+        this.hideProgressModal();
+        
         if (result.success) {
-          this.showAlert('success', 'Asset created successfully! Redirecting to payment...');
+          this.showAlert('success', 'Document registered successfully! Redirecting to payment...');
           setTimeout(() => {
             window.location.href = result.data.stripeUrl;
           }, 2000);
         } else {
-          this.showAlert('error', result.error || 'Failed to create asset');
+          this.showAlert('error', result.error || 'Failed to register document');
         }
       } catch (error) {
-        console.error('Asset creation error:', error);
+        this.hideProgressModal();
+        console.error('Document registration error:', error);
         this.showAlert('error', 'Error: ' + error.message);
       }
     };
@@ -1463,22 +1813,356 @@ class VeritasApp {
 
   async loadUserAssets() {
     try {
-      const response = await fetch(\`/api/assets/user/\${this.currentUser.id}\`);
+      const response = await fetch(\`/api/web3-assets/user/\${this.currentUser.id}\`);
       const result = await response.json();
       
       const container = document.getElementById('user-assets');
-      if (result.success && result.data.assets.length > 0) {
-        container.innerHTML = result.data.assets.map(asset => \`<div class="asset-card"><div class="asset-type">\${asset.documentType}</div><div class="asset-title">\${asset.title}</div><div class="asset-description">\${asset.description}</div><div class="asset-meta"><span>Token: \${asset.tokenId}</span><span>\${new Date(asset.createdAt).toLocaleDateString()}</span></div></div>\`).join('');
+      if (result.success) {
+        const { pending, confirmed } = result.data;
+        const allAssets = [...pending, ...confirmed];
         
-        document.getElementById('owned-count').textContent = result.data.assets.filter(a => a.ownerId === this.currentUser.id).length;
-        document.getElementById('created-count').textContent = result.data.assets.filter(a => a.creatorId === this.currentUser.id).length;
+        if (allAssets.length > 0) {
+          let html = '<div style="display: flex; flex-direction: column; gap: 0.75rem;">';
+          
+          // Show pending documents first
+          if (pending.length > 0) {
+            html += '<h4 style="margin-bottom: 0.5rem; color: #d97706;">⏳ Pending Payment</h4>';
+            pending.forEach(asset => {
+              html += \`
+                <div class="asset-card" style="border-left: 4px solid #d97706; cursor: pointer;" onclick="window.app.viewAsset('\${asset.id}')">
+                  <div class="asset-type">\${asset.documentType}</div>
+                  <div class="asset-title">\${asset.title}</div>
+                  <div class="asset-description">\${asset.description || 'No description'}</div>
+                  <div class="asset-meta">
+                    <span>NFT: \${asset.tokenId}</span>
+                    <span>\${new Date(asset.createdAt).toLocaleDateString()}</span>
+                    <span style="color: #d97706; font-weight: 600;">⏳ Pending</span>
+                  </div>
+                </div>
+              \`;
+            });
+          }
+          
+          // Show confirmed/registered documents
+          if (confirmed.length > 0) {
+            html += '<h4 style="margin-bottom: 0.5rem; margin-top: 1rem; color: #059669;">📜 Registered Documents</h4>';
+            confirmed.forEach(asset => {
+              const isRegistered = asset.vdcBlockNumber;
+              const statusColor = isRegistered ? '#059669' : '#d97706';
+              const statusIcon = isRegistered ? '✅' : '⏳';
+              const statusText = isRegistered ? 'Registered' : 'Pending Approval';
+              const blockInfo = isRegistered ? \`Block #\${asset.vdcBlockNumber}\` : '';
+              
+              html += \`
+                <div class="asset-card" style="border-left: 4px solid \${statusColor}; cursor: pointer;" onclick="window.app.viewAsset('\${asset.id}')">
+                  <div class="asset-type">\${asset.documentType}</div>
+                  <div class="asset-title">\${asset.title}</div>
+                  <div class="asset-description">\${asset.description || 'No description'}</div>
+                  <div class="asset-meta">
+                    <span>NFT: \${asset.tokenId}</span>
+                    <span>\${new Date(asset.createdAt).toLocaleDateString()}</span>
+                    <span style="color: \${statusColor}; font-weight: 600;">\${statusIcon} \${statusText}\${blockInfo ? ' • ' + blockInfo : ''}</span>
+                  </div>
+                </div>
+              \`;
+            });
+          }
+          
+          html += '</div>';
+          container.innerHTML = html;
+          
+          document.getElementById('owned-count').textContent = confirmed.filter(a => a.vdcBlockNumber).length;
+          document.getElementById('created-count').textContent = allAssets.length;
+        } else {
+          container.innerHTML = '<p class="text-center text-muted">No documents found. Create your first registered document to get started!</p>';
+          document.getElementById('owned-count').textContent = '0';
+          document.getElementById('created-count').textContent = '0';
+        }
       } else {
-        container.innerHTML = '<p class="text-center text-muted">No assets found. Create your first asset to get started!</p>';
-        document.getElementById('owned-count').textContent = '0';
-        document.getElementById('created-count').textContent = '0';
+        container.innerHTML = '<div class="alert alert-error">Failed to load assets</div>';
       }
     } catch (error) {
       document.getElementById('user-assets').innerHTML = '<div class="alert alert-error">Failed to load assets</div>';
+    }
+  }
+
+  renderAdmin() {
+    const content = document.getElementById('content');
+    content.innerHTML = \`
+      <div class="card">
+        <div class="card-header">
+          <h2 class="card-title" style="color: #f59e0b;">⚙️ Admin Panel</h2>
+          <p class="card-subtitle">Manage blockchain transactions and system operations</p>
+        </div>
+        <div id="admin-content">
+          <div class="loading"><div class="spinner"></div><p>Loading pending transactions...</p></div>
+        </div>
+      </div>
+    \`;
+    
+    this.loadPendingTransactions();
+  }
+
+  async loadPendingTransactions() {
+    try {
+      const response = await fetch('/api/vdc/pending');
+      const result = await response.json();
+      
+      const container = document.getElementById('admin-content');
+      
+      if (result.success && result.data.transactions.length > 0) {
+        const transactions = result.data.transactions;
+        
+        let html = \`
+          <div style="margin-bottom: 1rem;">
+            <strong style="color: #f59e0b;">\${transactions.length} Pending Transaction\${transactions.length !== 1 ? 's' : ''}</strong>
+          </div>
+          <div style="display: flex; flex-direction: column; gap: 1rem;">
+        \`;
+        
+        transactions.forEach((tx, index) => {
+          const txData = tx.data || {};
+          html += \`
+            <div class="card" style="border-left: 4px solid #f59e0b;">
+              <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 1rem;">
+                <div>
+                  <div style="font-weight: 600; color: #f59e0b;">Transaction #\${index + 1}</div>
+                  <div style="font-size: 0.75rem; color: #6b7280; margin-top: 0.25rem;">\${tx.id}</div>
+                </div>
+                <div style="background: #fef3c7; color: #92400e; padding: 0.25rem 0.75rem; border-radius: 0.375rem; font-size: 0.75rem; font-weight: 600;">
+                  \${tx.type}
+                </div>
+              </div>
+              
+              <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 0.75rem; margin-bottom: 1rem; font-size: 0.875rem;">
+                <div>
+                  <div style="color: #6b7280; font-size: 0.75rem;">Asset ID</div>
+                  <div style="font-family: monospace; font-size: 0.75rem;">\${txData.assetId || 'N/A'}</div>
+                </div>
+                <div>
+                  <div style="color: #6b7280; font-size: 0.75rem;">Token ID</div>
+                  <div style="font-family: monospace; font-size: 0.75rem;">\${txData.tokenId || 'N/A'}</div>
+                </div>
+                <div>
+                  <div style="color: #6b7280; font-size: 0.75rem;">Creator</div>
+                  <div style="font-family: monospace; font-size: 0.75rem;">\${txData.creatorId || 'N/A'}</div>
+                </div>
+                <div>
+                  <div style="color: #6b7280; font-size: 0.75rem;">Created</div>
+                  <div>\${new Date(tx.timestamp).toLocaleString()}</div>
+                </div>
+              </div>
+              
+              <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+                <button onclick="window.app.queryTransaction('\${tx.id}')" class="btn btn-secondary" style="flex: 1; min-width: 120px;">
+                  🔍 Query
+                </button>
+                <button onclick="window.app.mineTransaction('\${tx.id}')" class="btn btn-primary" style="flex: 1; min-width: 160px;">
+                  ✅ Approve (Sign and Mine Block)
+                </button>
+                <button onclick="window.app.deleteTransaction('\${tx.id}')" class="btn" style="flex: 1; min-width: 120px; background: #dc2626; color: white;">
+                  🗑️ Delete
+                </button>
+              </div>
+            </div>
+          \`;
+        });
+        
+        html += '</div>';
+        container.innerHTML = html;
+      } else {
+        container.innerHTML = \`
+          <div style="text-align: center; padding: 3rem; color: #6b7280;">
+            <div style="font-size: 3rem; margin-bottom: 1rem;">✅</div>
+            <p style="font-size: 1.125rem; font-weight: 600; margin-bottom: 0.5rem;">No Pending Transactions</p>
+            <p style="font-size: 0.875rem;">All transactions have been mined to the blockchain.</p>
+          </div>
+        \`;
+      }
+    } catch (error) {
+      console.error('Failed to load pending transactions:', error);
+      document.getElementById('admin-content').innerHTML = \`
+        <div class="alert alert-error">Failed to load pending transactions</div>
+      \`;
+    }
+  }
+
+  async queryTransaction(txId) {
+    try {
+      // Get transaction details
+      const txResponse = await fetch('/api/vdc/pending');
+      const txResult = await txResponse.json();
+      
+      if (!txResult.success) {
+        alert('Failed to load transaction details');
+        return;
+      }
+      
+      const transaction = txResult.data.transactions.find(tx => tx.id === txId);
+      if (!transaction) {
+        alert('Transaction not found');
+        return;
+      }
+      
+      const txData = transaction.data || {};
+      
+      // Get user details if available
+      let userInfo = '';
+      if (txData.creatorId) {
+        try {
+          const userResponse = await fetch(\`/api/users/\${txData.creatorId}\`);
+          const userResult = await userResponse.json();
+          if (userResult.success) {
+            const user = userResult.data;
+            userInfo = \`
+              <div style="background: #f3f4f6; padding: 1rem; border-radius: 0.5rem; margin-top: 1rem;">
+                <h4 style="margin: 0 0 0.75rem 0; color: #1f2937;">User Information</h4>
+                <div style="display: grid; gap: 0.5rem; font-size: 0.875rem;">
+                  <div><strong>Email:</strong> \${user.email || 'N/A'}</div>
+                  <div><strong>Account Type:</strong> <span style="text-transform: capitalize;">\${user.accountType || 'N/A'}</span></div>
+                  <div><strong>Created:</strong> \${user.createdAt ? new Date(user.createdAt).toLocaleString() : 'N/A'}</div>
+                  <div><strong>User ID:</strong> <code style="font-size: 0.75rem;">\${user.id}</code></div>
+                </div>
+              </div>
+            \`;
+          }
+        } catch (err) {
+          console.error('Failed to fetch user info:', err);
+        }
+      }
+      
+      // Show modal with all details
+      this.showModal('Transaction Details', \`
+        <div style="max-height: 70vh; overflow-y: auto;">
+          <div style="margin-bottom: 1.5rem;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+              <h3 style="margin: 0; color: #1f2937;">Transaction #\${txId}</h3>
+              <span style="background: #fef3c7; color: #92400e; padding: 0.25rem 0.75rem; border-radius: 0.375rem; font-size: 0.75rem; font-weight: 600;">
+                \${transaction.type}
+              </span>
+            </div>
+            
+            <div style="display: grid; gap: 0.75rem; font-size: 0.875rem;">
+              <div>
+                <div style="color: #6b7280; font-size: 0.75rem; margin-bottom: 0.25rem;">Transaction ID</div>
+                <code style="background: #f3f4f6; padding: 0.5rem; border-radius: 0.25rem; display: block; font-size: 0.75rem;">\${transaction.id}</code>
+              </div>
+              
+              <div>
+                <div style="color: #6b7280; font-size: 0.75rem; margin-bottom: 0.25rem;">Asset ID</div>
+                <code style="background: #f3f4f6; padding: 0.5rem; border-radius: 0.25rem; display: block; font-size: 0.75rem;">\${txData.assetId || 'N/A'}</code>
+              </div>
+              
+              <div>
+                <div style="color: #6b7280; font-size: 0.75rem; margin-bottom: 0.25rem;">Token ID</div>
+                <code style="background: #f3f4f6; padding: 0.5rem; border-radius: 0.25rem; display: block; font-size: 0.75rem;">\${txData.tokenId || 'N/A'}</code>
+              </div>
+              
+              <div>
+                <div style="color: #6b7280; font-size: 0.75rem; margin-bottom: 0.25rem;">Document Title</div>
+                <div>\${txData.title || 'N/A'}</div>
+              </div>
+              
+              <div>
+                <div style="color: #6b7280; font-size: 0.75rem; margin-bottom: 0.25rem;">Document Type</div>
+                <div style="text-transform: capitalize;">\${txData.documentType || 'N/A'}</div>
+              </div>
+              
+              <div>
+                <div style="color: #6b7280; font-size: 0.75rem; margin-bottom: 0.25rem;">IPFS Hash</div>
+                <code style="background: #f3f4f6; padding: 0.5rem; border-radius: 0.25rem; display: block; font-size: 0.75rem;">\${txData.ipfsHash || 'N/A'}</code>
+              </div>
+              
+              <div>
+                <div style="color: #6b7280; font-size: 0.75rem; margin-bottom: 0.25rem;">Ethereum TX</div>
+                <code style="background: #f3f4f6; padding: 0.5rem; border-radius: 0.25rem; display: block; font-size: 0.75rem;">\${txData.ethereumTxHash || 'N/A'}</code>
+              </div>
+              
+              <div>
+                <div style="color: #6b7280; font-size: 0.75rem; margin-bottom: 0.25rem;">Stripe Session</div>
+                <code style="background: #f3f4f6; padding: 0.5rem; border-radius: 0.25rem; display: block; font-size: 0.75rem;">\${txData.stripeSessionId || 'N/A'}</code>
+              </div>
+              
+              <div>
+                <div style="color: #6b7280; font-size: 0.75rem; margin-bottom: 0.25rem;">Paid Amount</div>
+                <div>\$\${txData.paidAmount || '25'}</div>
+              </div>
+              
+              <div>
+                <div style="color: #6b7280; font-size: 0.75rem; margin-bottom: 0.25rem;">Created At</div>
+                <div>\${new Date(transaction.timestamp).toLocaleString()}</div>
+              </div>
+            </div>
+            
+            \${userInfo}
+          </div>
+        </div>
+      \`);
+    } catch (error) {
+      console.error('Query transaction error:', error);
+      alert('Failed to query transaction: ' + error.message);
+    }
+  }
+
+  async mineTransaction(txId) {
+    if (!confirm(\`Are you sure you want to mine transaction \${txId}?\`)) {
+      return;
+    }
+    
+    try {
+      this.showProgressModal('Mining Transaction', 'Mining transaction to blockchain...');
+      
+      const response = await fetch('/api/vdc/mine', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ adminSecret: prompt('Enter admin secret:') })
+      });
+      
+      const result = await response.json();
+      
+      this.hideProgressModal();
+      
+      if (result.success) {
+        alert(\`✅ Successfully mined block #\${result.data.blockNumber}\`);
+        this.loadPendingTransactions(); // Refresh the list
+      } else {
+        alert('Failed to mine transaction: ' + result.error);
+      }
+    } catch (error) {
+      this.hideProgressModal();
+      console.error('Mine transaction error:', error);
+      alert('Failed to mine transaction: ' + error.message);
+    }
+  }
+
+  async deleteTransaction(txId) {
+    if (!confirm(\`⚠️ WARNING: Are you sure you want to DELETE transaction \${txId}? This action cannot be undone!\`)) {
+      return;
+    }
+    
+    try {
+      const adminSecret = prompt('Enter admin secret to confirm deletion:');
+      if (!adminSecret) return;
+      
+      const response = await fetch(\`/api/vdc/transaction/\${txId}\`, {
+        method: 'DELETE',
+        headers: { 
+          'Content-Type': 'application/json',
+          'x-admin-secret': adminSecret
+        }
+      });
+      
+      const result = await response.json();
+      
+      if (result.success) {
+        alert('✅ Transaction deleted successfully');
+        this.loadPendingTransactions(); // Refresh the list
+      } else {
+        alert('Failed to delete transaction: ' + result.error);
+      }
+    } catch (error) {
+      console.error('Delete transaction error:', error);
+      alert('Failed to delete transaction: ' + error.message);
     }
   }
 
@@ -1690,6 +2374,139 @@ class VeritasApp {
     setTimeout(() => alert.remove(), 5000);
   }
 
+  showProgressModal(title, message) {
+    const modal = document.createElement('div');
+    modal.className = 'progress-modal';
+    modal.id = 'progress-modal';
+    modal.innerHTML = \`
+      <div class="progress-modal-content">
+        <div class="progress-spinner"></div>
+        <div class="progress-modal-title">\${title}</div>
+        <div class="progress-modal-message">\${message}</div>
+      </div>
+    \`;
+    document.body.appendChild(modal);
+    return modal;
+  }
+
+  hideProgressModal() {
+    const modal = document.getElementById('progress-modal');
+    if (modal) {
+      modal.remove();
+    }
+  }
+
+  showModal(title, content) {
+    const modal = document.createElement('div');
+    modal.className = 'modal';
+    modal.innerHTML = \`
+      <div class="modal-content" style="max-width: 700px;">
+        <div class="modal-header">
+          <h3 class="modal-title">\${title}</h3>
+          <button class="modal-close" onclick="this.closest('.modal').remove()">&times;</button>
+        </div>
+        <div class="modal-body">
+          \${content}
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" onclick="this.closest('.modal').remove()">Close</button>
+        </div>
+      </div>
+    \`;
+    document.body.appendChild(modal);
+    return modal;
+  }
+
+  showAlert(type, message) {
+    const alertClass = type === 'success' ? 'alert-success' : type === 'error' ? 'alert-error' : 'alert-warning';
+    const alert = document.createElement('div');
+    alert.className = \`alert \${alertClass}\`;
+    alert.textContent = message;
+    alert.style.cssText = 'position: fixed; top: 20px; right: 20px; z-index: 10000; max-width: 400px;';
+    
+    document.body.appendChild(alert);
+    
+    setTimeout(() => {
+      alert.remove();
+    }, 5000);
+  }
+
+  async viewAsset(assetId) {
+    try {
+      const response = await fetch(\`/api/web3-assets/web3/\${assetId}\`, {
+        headers: {
+          'Authorization': 'Bearer ' + this.sessionToken
+        }
+      });
+      
+      const result = await response.json();
+      if (result.success) {
+        const asset = result.data;
+        const isRegistered = asset.vdcBlockNumber;
+        const statusColor = isRegistered ? '#059669' : '#d97706';
+        const statusText = isRegistered ? 'Registered' : 'Pending Approval';
+        
+        const modal = document.createElement('div');
+        modal.className = 'modal';
+        modal.innerHTML = \`
+          <div class="modal-content" style="max-width: 600px;">
+            <div class="modal-header">
+              <h3 class="modal-title">📜 Document Details</h3>
+              <button class="modal-close" onclick="this.closest('.modal').remove()">&times;</button>
+            </div>
+            <div class="modal-body">
+              <div style="display: flex; flex-direction: column; gap: 1rem;">
+                <div>
+                  <span class="asset-type">\${asset.documentType}</span>
+                  <h3 style="margin: 0.5rem 0; font-size: 1.25rem;">\${asset.title}</h3>
+                  <p style="color: var(--text-secondary);">\${asset.description || 'No description'}</p>
+                </div>
+                
+                <div style="background-color: var(--surface); padding: 1rem; border-radius: 6px;">
+                  <div style="display: grid; gap: 0.75rem;">
+                    <div>
+                      <strong>Status:</strong>
+                      <span style="color: \${statusColor}; font-weight: 600; margin-left: 0.5rem;">
+                        \${isRegistered ? '✅' : '⏳'} \${statusText}
+                      </span>
+                    </div>
+                    <div><strong>NFT Token ID:</strong> \${asset.tokenId}</div>
+                    <div><strong>Created:</strong> \${new Date(asset.createdAt).toLocaleString()}</div>
+                    \${isRegistered ? \`<div><strong>VDC Block:</strong> #\${asset.vdcBlockNumber}</div>\` : ''}
+                    \${asset.ipfsHash ? \`<div><strong>IPFS Hash:</strong> <code style="font-size: 0.75rem; word-break: break-all;">\${asset.ipfsHash}</code></div>\` : ''}
+                    \${asset.ethereumTxHash ? \`<div><strong>Ethereum TX:</strong> <a href="https://etherscan.io/tx/\${asset.ethereumTxHash}" target="_blank" style="font-size: 0.75rem; word-break: break-all;">\${asset.ethereumTxHash}</a></div>\` : ''}
+                  </div>
+                </div>
+                
+                \${isRegistered ? \`
+                  <div class="alert alert-success">
+                    <strong>✓ This document is permanently registered on the VDC blockchain</strong><br>
+                    <small>Block #\${asset.vdcBlockNumber} provides cryptographic proof of authenticity and timestamp.</small>
+                  </div>
+                \` : \`
+                  <div class="alert alert-warning">
+                    <strong>⏳ This document is awaiting approval</strong><br>
+                    <small>Once approved and mined into the VDC blockchain, it will be permanently registered.</small>
+                  </div>
+                \`}
+              </div>
+            </div>
+            <div class="modal-footer">
+              <button class="btn btn-secondary" onclick="this.closest('.modal').remove()">Close</button>
+            </div>
+          </div>
+        \`;
+        
+        document.body.appendChild(modal);
+      } else {
+        this.showAlert('error', 'Failed to load document details');
+      }
+    } catch (error) {
+      console.error('View document error:', error);
+      this.showAlert('error', 'Error loading document: ' + error.message);
+    }
+  }
+
   openAccountRequestEmail() {
     const subject = 'Request for Veritas Documents Account';
     const body = 'Hello,\\\\n\\\\nI would like to request an account for Veritas Documents.\\\\n\\\\nPlease provide me with an invitation link.\\\\n\\\\nThank you.';
@@ -1701,7 +2518,7 @@ class VeritasApp {
 
 // Initialize the application
 document.addEventListener('DOMContentLoaded', () => {
-  new VeritasApp();
+  window.app = new VeritasApp();
 });`;
 
   return c.text(js, 200, {
@@ -1752,8 +2569,8 @@ const appHTML = `
         </main>
     </div>
     
-  <script src="/static/app.bundle.js?v=7"></script>
-  <script src="/static/app.js?v=7"></script>
+  <script src="/static/app.bundle.js?v=10"></script>
+  <script src="/static/app.js?v=10"></script>
 </body>
 </html>
 `;
@@ -1847,6 +2664,160 @@ app.get('/health/pqc', async (c) => {
   } catch (err: any) {
     return c.json({ ok: false, error: err?.message || String(err) }, 500);
   }
+});
+
+// Success page after Stripe payment
+app.get('/success', async (c) => {
+  const sessionId = c.req.query('session_id');
+  const assetId = c.req.query('asset_id');
+  
+  const successHTML = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Payment Successful - Veritas Documents</title>
+  <link rel="stylesheet" href="/static/styles.css">
+  <style>
+    .success-container {
+      max-width: 600px;
+      margin: 4rem auto;
+      padding: 2rem;
+      text-align: center;
+    }
+    .success-icon {
+      font-size: 4rem;
+      margin-bottom: 1rem;
+    }
+    .success-title {
+      font-size: 2rem;
+      font-weight: 600;
+      color: var(--success-color);
+      margin-bottom: 1rem;
+    }
+    .success-message {
+      font-size: 1.1rem;
+      color: var(--text-secondary);
+      margin-bottom: 2rem;
+      line-height: 1.8;
+    }
+    .processing-info {
+      background: #eff6ff;
+      border: 1px solid #bfdbfe;
+      border-radius: 8px;
+      padding: 1.5rem;
+      margin: 2rem 0;
+      text-align: left;
+    }
+    .processing-info h3 {
+      color: #1d4ed8;
+      margin-bottom: 1rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    .processing-info p {
+      color: #1e40af;
+      margin-bottom: 0.5rem;
+    }
+    .processing-info strong {
+      color: #1e3a8a;
+    }
+    .asset-details {
+      background: var(--surface);
+      border-radius: 8px;
+      padding: 1.5rem;
+      margin: 2rem 0;
+      text-align: left;
+    }
+    .asset-details dt {
+      font-weight: 600;
+      color: var(--text-primary);
+      margin-top: 1rem;
+    }
+    .asset-details dd {
+      color: var(--text-secondary);
+      margin-left: 0;
+      font-family: monospace;
+      font-size: 0.9rem;
+      word-break: break-all;
+    }
+    .btn {
+      display: inline-block;
+      padding: 0.75rem 1.5rem;
+      background: var(--primary-color);
+      color: white;
+      text-decoration: none;
+      border-radius: 6px;
+      margin: 0.5rem;
+      transition: background 0.2s;
+    }
+    .btn:hover {
+      background: var(--primary-hover);
+    }
+    .btn-secondary {
+      background: var(--secondary-color);
+    }
+  </style>
+</head>
+<body>
+  <div class="success-container">
+    <div class="success-icon">✅</div>
+    <h1 class="success-title">Payment Successful!</h1>
+    <p class="success-message">
+      Your asset has been created and payment has been received.
+      Thank you for using Veritas Documents!
+    </p>
+
+    <div class="processing-info">
+      <h3>⏳ Asset Registration in Progress</h3>
+      <p>
+        Your document is now securely stored on IPFS with post-quantum encryption.
+        <strong>Blockchain registration is currently being processed.</strong>
+      </p>
+      <p style="margin-top: 1rem;">
+        ⏱️ <strong>Processing Time:</strong> Please allow up to 24 hours for your asset 
+        to be permanently registered on the Veritas Documents Chain (VDC).
+      </p>
+      <p>
+        📧 <strong>Notification:</strong> We will email you once your asset registration 
+        is confirmed on the blockchain.
+      </p>
+      <p style="margin-top: 1rem; font-size: 0.9rem; color: #64748b;">
+        Your asset is already securely encrypted and stored. The blockchain registration 
+        adds an immutable record with dual post-quantum signatures for maximum security.
+      </p>
+    </div>
+
+    ${assetId ? `
+    <div class="asset-details">
+      <h3>Asset Details</h3>
+      <dl>
+        <dt>Asset ID</dt>
+        <dd>${assetId}</dd>
+        ${sessionId ? `
+        <dt>Payment Session</dt>
+        <dd>${sessionId}</dd>
+        ` : ''}
+        <dt>Status</dt>
+        <dd>✅ Payment Completed | ⏳ Blockchain Registration Pending</dd>
+      </dl>
+    </div>
+    ` : ''}
+
+    <div style="margin-top: 2rem;">
+      <a href="/dashboard" class="btn">Go to Dashboard</a>
+      <a href="/create-asset" class="btn btn-secondary">Create Another Asset</a>
+    </div>
+
+    <p style="margin-top: 2rem; color: var(--text-muted); font-size: 0.9rem;">
+      Questions? Contact support or check your dashboard for asset status updates.
+    </p>
+  </div>
+</body>
+</html>`;
+
+  return c.html(successHTML);
 });
 
 // Catch-all for SPA routing

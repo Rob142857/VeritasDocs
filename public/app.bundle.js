@@ -667,13 +667,10 @@
   async function hashData(data) {
     const encoder = new TextEncoder();
     const dataBuffer = encoder.encode(data);
-    const hashBuffer = await crypto.subtle.digest('SHA-256', dataBuffer);
+    const hashBuffer = await crypto.subtle.digest("SHA-256", dataBuffer);
     const hashArray = new Uint8Array(hashBuffer);
-    return Array.from(hashArray)
-      .map(b => b.toString(16).padStart(2, '0'))
-      .join('');
+    return Array.from(hashArray).map((b) => b.toString(16).padStart(2, "0")).join("");
   }
-
   window.VeritasCrypto = {
     encryptDocumentData,
     decryptDocumentData,

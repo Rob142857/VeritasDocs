@@ -212,6 +212,17 @@ export async function verifySignature(data: string, signature: string, dilithium
   return verifyResult.is_valid === true;
 }
 
+// Hash data with SHA-256 (for document integrity checking)
+export async function hashData(data: string): Promise<string> {
+  const encoder = new TextEncoder();
+  const dataBuffer = encoder.encode(data);
+  const hashBuffer = await crypto.subtle.digest('SHA-256', dataBuffer);
+  const hashArray = new Uint8Array(hashBuffer);
+  return Array.from(hashArray)
+    .map(b => b.toString(16).padStart(2, '0'))
+    .join('');
+}
+
 // Make functions available globally for inline HTML usage
 (window as any).VeritasCrypto = {
   encryptDocumentData,
@@ -219,7 +230,8 @@ export async function verifySignature(data: string, signature: string, dilithium
   generateClientKeypair,
   signData,
   verifySignature,
-  ensureCryptoReady
+  ensureCryptoReady,
+  hashData
 };
 
 console.log('Veritas Crypto module loaded');

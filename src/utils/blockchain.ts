@@ -601,6 +601,17 @@ export class VDCBlockchain {
         type: tx.type,
         timestamp: tx.timestamp
       }));
+      
+      // Update asset with block number if this is a document/asset creation transaction
+      if ((tx.type === 'document_creation' || tx.type === 'asset_transfer' || (tx.type as any) === 'asset_creation') && tx.data?.assetId) {
+        const assetData = await this.env.VERITAS_KV.get(`asset:${tx.data.assetId}`);
+        if (assetData) {
+          const asset = JSON.parse(assetData);
+          asset.vdcBlockNumber = blockNumber;
+          await this.env.VERITAS_KV.put(`asset:${tx.data.assetId}`, JSON.stringify(asset));
+          console.log(`✓ Updated asset ${tx.data.assetId} with block number ${blockNumber}`);
+        }
+      }
     }
 
     // Clear pending transactions

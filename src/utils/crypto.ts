@@ -129,10 +129,16 @@ export class MaataraClient {
   }
 
   async verifySignature(data: string, signature: string, publicKey: string): Promise<boolean> {
-    await this.ensureWasm();
-    const messageB64u = b64uEncode(encoder.encode(data));
-    const result = await dilithiumVerify(messageB64u, signature, publicKey);
-    return result.is_valid === true;
+    try {
+      await this.ensureWasm();
+      const messageB64u = b64uEncode(encoder.encode(data));
+      const result = await dilithiumVerify(messageB64u, signature, publicKey);
+      return result.is_valid === true;
+    } catch (error: any) {
+      // BAD_SIGNATURE errors from Maatara should be treated as invalid signatures, not exceptions
+      console.error('Signature verification error:', error?.message || error);
+      return false;
+    }
   }
 
   async addToChain(transactionData: any): Promise<string> {

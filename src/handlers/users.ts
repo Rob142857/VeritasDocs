@@ -3,6 +3,38 @@ import { Environment, User, APIResponse } from '../types';
 
 const userHandler = new Hono<{ Bindings: Environment }>();
 
+// Get user profile (alias for convenience)
+userHandler.get('/:userId', async (c) => {
+  try {
+    const env = c.env;
+    const userId = c.req.param('userId');
+
+    const userData = await env.VERITAS_KV.get(`user:${userId}`);
+    if (!userData) {
+      return c.json<APIResponse>({ success: false, error: 'User not found' }, 404);
+    }
+
+    const user: User = JSON.parse(userData);
+
+    // Return full user info (for admin panel)
+    const publicUser = {
+      id: user.id,
+      email: user.email,
+      publicKey: user.publicKey,
+      createdAt: user.createdAt,
+      accountType: user.accountType,
+    };
+
+    return c.json<APIResponse>({
+      success: true,
+      data: publicUser,
+    });
+  } catch (error) {
+    console.error('Error getting user:', error);
+    return c.json<APIResponse>({ success: false, error: 'Internal server error' }, 500);
+  }
+});
+
 // Get user profile
 userHandler.get('/profile/:userId', async (c) => {
   try {

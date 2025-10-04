@@ -219,6 +219,36 @@ vdcHandler.post('/mine', async (c) => {
   }
 });
 
+// Get pending VDC transactions (using VDC standard prefix)
+vdcHandler.get('/pending', async (c) => {
+  try {
+    // Use VDC standard: list all vdc:pending:* keys
+    const pendingList = await c.env.VERITAS_KV.list({ prefix: 'vdc:pending:' });
+    const transactions = [];
+
+    for (const key of pendingList.keys) {
+      // Skip the count key
+      if (key.name === 'vdc:pending:count') continue;
+      
+      const txData = await c.env.VERITAS_KV.get(key.name);
+      if (txData) {
+        transactions.push(JSON.parse(txData));
+      }
+    }
+
+    return c.json<APIResponse>({
+      success: true,
+      data: {
+        count: transactions.length,
+        transactions
+      }
+    });
+  } catch (error: any) {
+    console.error('VDC pending transactions error:', error);
+    return c.json<APIResponse>({ success: false, error: error?.message || 'Failed to get pending transactions' }, 500);
+  }
+});
+
 vdcHandler.post('/debug/kv', async (c) => {
   const body = await c.req.json();
   const { key, value } = body || {};
@@ -233,6 +263,152 @@ vdcHandler.post('/debug/kv', async (c) => {
   } catch (error: any) {
     console.error('VDC debug kv error:', error);
     return c.json<APIResponse>({ success: false, error: error?.message || 'Failed to set KV' }, 500);
+  }
+});
+
+// Diagnostic endpoint to check KV namespace and asset location
+vdcHandler.get('/debug/find-asset/:assetId', async (c) => {
+  try {
+    const assetId = c.req.param('assetId');
+    const env = c.env;
+    
+    // Try different key patterns
+    const patterns = [
+      `asset:${assetId}`,
+      assetId,
+      `asset_${assetId}`,
+      `web3_asset:${assetId}`
+    ];
+    
+    const results: any = {};
+    
+    for (const pattern of patterns) {
+      const value = await env.VERITAS_KV.get(pattern);
+      if (value) {
+        results[pattern] = JSON.parse(value);
+      }
+    }
+    
+    return c.json<APIResponse>({
+      success: true,
+      data: {
+        assetId,
+        found: Object.keys(results).length > 0,
+        results
+      }
+    });
+  } catch (error: any) {
+    console.error('Find asset error:', error);
+    return c.json<APIResponse>({ success: false, error: error?.message || 'Failed to find asset' }, 500);
+  }
+});
+
+// Admin endpoint to manually update mined asset with block number
+vdcHandler.post('/admin/fix-mined-asset', async (c) => {
+  try {
+    const body = await c.req.json();
+    const adminSecret = extractAdminSecret(c.req.header('x-admin-secret'), body);
+    const authError = ensureAdminAccess(c, adminSecret);
+    if (authError) return authError;
+    
+    const { assetId, blockNumber } = body;
+    
+    if (!assetId || blockNumber === undefined) {
+      return c.json<APIResponse>({ 
+        success: false, 
+        error: 'assetId and blockNumber are required' 
+      }, 400);
+    }
+    
+    const env = c.env;
+    
+    // Try to find the asset
+    const assetKey = `asset:${assetId}`;
+    const assetData = await env.VERITAS_KV.get(assetKey);
+    
+    if (!assetData) {
+      return c.json<APIResponse>({ 
+        success: false, 
+        error: `Asset not found: ${assetKey}` 
+      }, 404);
+    }
+    
+    const asset = JSON.parse(assetData);
+    
+    // Update with block number
+    asset.vdcBlockNumber = blockNumber;
+    asset.status = 'confirmed';
+    asset.minedAt = Date.now();
+    
+    // Save back to KV
+    await env.VERITAS_KV.put(assetKey, JSON.stringify(asset));
+    
+    console.log(`✅ Fixed mined asset ${assetId} with block number ${blockNumber}`);
+    
+    return c.json<APIResponse>({
+      success: true,
+      data: {
+        assetId,
+        blockNumber,
+        updatedAsset: asset
+      }
+    });
+  } catch (error: any) {
+    console.error('Fix mined asset error:', error);
+    return c.json<APIResponse>({ 
+      success: false, 
+      error: error?.message || 'Failed to fix mined asset' 
+    }, 500);
+  }
+});
+
+// Admin endpoint to delete a pending transaction
+vdcHandler.delete('/transaction/:txId', async (c) => {
+  try {
+    const adminSecret = extractAdminSecret(c.req.header('x-admin-secret'), null);
+    const authError = ensureAdminAccess(c, adminSecret);
+    if (authError) return authError;
+    
+    const txId = c.req.param('txId');
+    const env = c.env;
+    
+    // Get the transaction from VDC standard storage: vdc:pending:{txId}
+    const txKey = `vdc:pending:${txId}`;
+    const txData = await env.VERITAS_KV.get(txKey);
+    
+    if (!txData) {
+      return c.json<APIResponse>({ 
+        success: false, 
+        error: `Transaction not found: ${txId}` 
+      }, 404);
+    }
+    
+    const deletedTx = JSON.parse(txData);
+    
+    // Delete the transaction key
+    await env.VERITAS_KV.delete(txKey);
+    
+    // Decrement the pending count
+    const currentCountStr = await env.VERITAS_KV.get('vdc:pending:count');
+    const currentCount = parseInt(currentCountStr || '0', 10);
+    const newCount = Math.max(0, currentCount - 1);
+    await env.VERITAS_KV.put('vdc:pending:count', newCount.toString());
+    
+    console.log(`✅ Deleted pending transaction ${txId}, new count: ${newCount}`);
+    
+    return c.json<APIResponse>({
+      success: true,
+      data: {
+        deletedTransaction: deletedTx,
+        remainingCount: newCount
+      }
+    });
+  } catch (error: any) {
+    console.error('Delete transaction error:', error);
+    return c.json<APIResponse>({ 
+      success: false, 
+      error: error?.message || 'Failed to delete transaction' 
+    }, 500);
   }
 });
 

@@ -1,8 +1,16 @@
 // Types for the Veritas Documents system
+export interface EncryptionMetadata {
+  algorithm: string;
+  version: string;
+  keyId?: string;
+  source: 'client' | 'server' | 'system';
+}
+
 export interface User {
   id: string;
   email: string;
   publicKey: string;
+  kyberPublicKey?: string;
   dilithiumPublicKey: string;
   encryptedPrivateData: string; // Kyber-encrypted user details
   blockchainTxId?: string;
@@ -21,7 +29,7 @@ export interface Asset {
   description: string;
   documentType: 'will' | 'deed' | 'certificate' | 'contract' | 'other';
   ipfsHash: string;
-  encryptedData: string; // Kyber-encrypted document
+  encryptedData?: string; // Legacy support: Kyber-encrypted document (KV-stored)
   signature: string; // Dilithium signature
   createdAt: number;
   updatedAt: number;
@@ -37,6 +45,15 @@ export interface Asset {
   ethereumTxHash?: string; // Transaction hash on Ethereum
   blockNumber?: number; // Ethereum block number
   ipfsMetadataHash?: string; // IPFS hash for metadata
+  storage?: {
+    documentR2Key: string;
+    storedAt: number;
+    size: number;
+    ipfsHash: string;
+    ipfsGatewayUrl: string;
+    ipfsPinned?: boolean;
+    encryption?: EncryptionMetadata;
+  };
 }
 
 export interface OneTimeLink {
@@ -96,6 +113,7 @@ export interface EncryptedUserData {
 
 export interface Environment {
   VERITAS_KV: KVNamespace;
+  VDC_STORAGE: R2Bucket;
   STRIPE_SECRET_KEY: string;
   STRIPE_WEBHOOK_SECRET: string;
   MAATARA_CHAIN_PRIVATE_KEY: string;

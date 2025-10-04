@@ -222,19 +222,8 @@ vdcHandler.post('/mine', async (c) => {
 // Get pending VDC transactions (using VDC standard prefix)
 vdcHandler.get('/pending', async (c) => {
   try {
-    // Use VDC standard: list all vdc:pending:* keys
-    const pendingList = await c.env.VERITAS_KV.list({ prefix: 'vdc:pending:' });
-    const transactions = [];
-
-    for (const key of pendingList.keys) {
-      // Skip the count key
-      if (key.name === 'vdc:pending:count') continue;
-      
-      const txData = await c.env.VERITAS_KV.get(key.name);
-      if (txData) {
-        transactions.push(JSON.parse(txData));
-      }
-    }
+    const vdc = await initializeVDC(c.env);
+    const transactions = await vdc.getPendingTransactions();
 
     return c.json<APIResponse>({
       success: true,
@@ -370,37 +359,23 @@ vdcHandler.delete('/transaction/:txId', async (c) => {
     if (authError) return authError;
     
     const txId = c.req.param('txId');
-    const env = c.env;
-    
-    // Get the transaction from VDC standard storage: vdc:pending:{txId}
-    const txKey = `vdc:pending:${txId}`;
-    const txData = await env.VERITAS_KV.get(txKey);
-    
-    if (!txData) {
-      return c.json<APIResponse>({ 
-        success: false, 
-        error: `Transaction not found: ${txId}` 
+    const vdc = await initializeVDC(c.env);
+    const { transaction: deletedTx, remainingCount } = await vdc.removePendingTransaction(txId);
+
+    if (!deletedTx) {
+      return c.json<APIResponse>({
+        success: false,
+        error: `Transaction not found: ${txId}`
       }, 404);
     }
-    
-    const deletedTx = JSON.parse(txData);
-    
-    // Delete the transaction key
-    await env.VERITAS_KV.delete(txKey);
-    
-    // Decrement the pending count
-    const currentCountStr = await env.VERITAS_KV.get('vdc:pending:count');
-    const currentCount = parseInt(currentCountStr || '0', 10);
-    const newCount = Math.max(0, currentCount - 1);
-    await env.VERITAS_KV.put('vdc:pending:count', newCount.toString());
-    
-    console.log(`✅ Deleted pending transaction ${txId}, new count: ${newCount}`);
+
+    console.log(`✅ Deleted pending transaction ${txId}, new count: ${remainingCount}`);
     
     return c.json<APIResponse>({
       success: true,
       data: {
         deletedTransaction: deletedTx,
-        remainingCount: newCount
+        remainingCount
       }
     });
   } catch (error: any) {

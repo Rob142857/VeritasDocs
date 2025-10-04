@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
-import { Environment, User, APIResponse } from '../types';
+import { Environment, User, APIResponse, OneTimeLink } from '../types';
+import { storeActivationLink } from '../utils/activation';
 
 const userHandler = new Hono<{ Bindings: Environment }>();
 
@@ -99,17 +100,17 @@ userHandler.post('/invite', async (c) => {
     const token = crypto.randomUUID();
     const expiresAt = Date.now() + (7 * 24 * 60 * 60 * 1000); // 7 days
 
-    const inviteLink = {
+    const inviteLink: OneTimeLink = {
       id: linkId,
       token,
       createdBy: userId,
+      inviteType: 'user',
       email,
       expiresAt,
       used: false,
-      type: 'invitation',
     };
 
-    await env.VERITAS_KV.put(`link:${token}`, JSON.stringify(inviteLink));
+    await storeActivationLink(env, inviteLink);
 
     const activationUrl = `${c.req.url.split('/api')[0]}/activate?token=${token}`;
 

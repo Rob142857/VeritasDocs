@@ -8,8 +8,8 @@
  * All blocks signed by system master key stored in Cloudflare Secrets.
  */
 
-import { Environment } from '../types';
-import { IPFSClient, createIPFSRecord } from './ipfs';
+import { Environment, EncryptionMetadata } from '../types';
+import { IPFSClient, createIPFSRecord, IPFSRecord } from './ipfs';
 import { MaataraClient } from './crypto';
 
 function getSystemDilithiumPrivateKey(env: Environment): string {
@@ -26,6 +26,14 @@ function getSystemDilithiumPrivateKey(env: Environment): string {
   }
 
   return combined;
+}
+
+function getSystemKyberPrivateKey(env: Environment): string {
+  if (env.SYSTEM_KYBER_PRIVATE_KEY && env.SYSTEM_KYBER_PRIVATE_KEY.length > 0) {
+    return env.SYSTEM_KYBER_PRIVATE_KEY;
+  }
+
+  throw new Error('System Kyber private key not configured');
 }
 
 /**
@@ -76,6 +84,16 @@ export interface VDCTransaction {
       keyVersion: number;   // For key rotation
     };
   };
+
+  // Storage metadata
+  storage?: {
+    r2Key: string;
+    storedAt: number;
+    ipfsHash?: string;
+    ipfsGatewayUrl?: string;
+    ipfsPinned?: boolean;
+    encryption?: EncryptionMetadata;
+  };
 }
 
 /**
@@ -100,6 +118,15 @@ export interface VDCBlock {
   
   // IPFS storage
   ipfsHash?: string;
+
+  // Secondary storage metadata
+  storage?: {
+    r2Key: string;
+    storedAt: number;
+    ipfsHash?: string;
+    ipfsGatewayUrl?: string;
+    ipfsPinned?: boolean;
+  };
 }
 
 /**
@@ -125,6 +152,8 @@ export class VDCBlockchain {
   private ipfsClient: IPFSClient;
   private maataraClient: MaataraClient;
   private genesisBlock: VDCBlock | null = null;
+  private readonly pendingPrefix = 'pending/';
+  private readonly blockPrefix = 'blocks/';
 
   constructor(env: Environment) {
     this.env = env;
@@ -136,14 +165,18 @@ export class VDCBlockchain {
    * Initialize the blockchain (load or create genesis)
    */
   async initialize(): Promise<void> {
-    // Try to load existing genesis block
-    const genesisData = await this.env.VERITAS_KV.get('vdc:block:0');
-    
-    if (genesisData) {
-      this.genesisBlock = JSON.parse(genesisData);
-      console.log('✅ VDC: Loaded existing genesis block');
-    } else {
-      console.log('⚠️  VDC: No genesis block found - call createGenesisBlock()');
+    try {
+      const genesisBlock = await this.getBlock(0);
+
+      if (genesisBlock) {
+        this.genesisBlock = genesisBlock;
+        console.log('✅ VDC: Loaded existing genesis block');
+      } else {
+        console.log('⚠️  VDC: No genesis block found - call createGenesisBlock()');
+      }
+    } catch (error) {
+      console.error('VDC initialize error:', error);
+      console.log('⚠️  VDC: Unable to load genesis block - call createGenesisBlock()');
     }
   }
 
@@ -255,22 +288,14 @@ export class VDCBlockchain {
       systemPrivateKey
     );
 
-    // Upload to IPFS (optional for now)
-    const blockJson = JSON.stringify(genesisBlock, null, 2);
-    try {
-      const ipfsRecord = await createIPFSRecord(this.ipfsClient, blockJson, 'application/json');
-      genesisBlock.ipfsHash = ipfsRecord.hash;
-    } catch (error) {
-      console.warn('IPFS upload failed, using mock hash:', error);
-      genesisBlock.ipfsHash = 'QmMockGenesis' + Date.now();
-    }
+    const persistedGenesis = await this.persistBlock(genesisBlock, {
+      type: 'genesis'
+    });
 
-    // Store in KV
-    await this.env.VERITAS_KV.put('vdc:block:0', JSON.stringify(genesisBlock));
     await this.env.VERITAS_KV.put('vdc:latest', JSON.stringify({
-      blockNumber: 0,
-      hash: genesisBlock.hash,
-      ipfsHash: genesisBlock.ipfsHash,
+      blockNumber: persistedGenesis.blockNumber,
+      hash: persistedGenesis.hash,
+      ipfsHash: persistedGenesis.ipfsHash,
       timestamp: blockTimestamp
     }));
     await this.env.VERITAS_KV.put('vdc:genesis', JSON.stringify(genesisData));
@@ -282,14 +307,14 @@ export class VDCBlockchain {
     }));
     await this.env.VERITAS_KV.put('vdc:pending:count', '0');
 
-    this.genesisBlock = genesisBlock;
+  this.genesisBlock = persistedGenesis;
 
     console.log('🎉 VDC: Genesis block created!');
-    console.log(`   Block Hash: ${genesisBlock.hash}`);
-    console.log(`   IPFS Hash: ${genesisBlock.ipfsHash}`);
-    console.log(`   Genesis TX: ${genesisTransaction.id}`);
+  console.log(`   Block Hash: ${persistedGenesis.hash}`);
+  console.log(`   IPFS Hash: ${persistedGenesis.ipfsHash}`);
+  console.log(`   Genesis TX: ${genesisTransaction.id}`);
 
-    return genesisBlock;
+  return persistedGenesis;
   }
 
   /**
@@ -495,35 +520,15 @@ export class VDCBlockchain {
   }
 
   private async storePendingTransaction(transaction: VDCTransaction): Promise<number> {
-    await this.env.VERITAS_KV.put(
-      `vdc:pending:${transaction.id}`,
-      JSON.stringify(transaction)
-    );
-
-    const currentCountStr = await this.env.VERITAS_KV.get('vdc:pending:count');
-    const currentCount = parseInt(currentCountStr || '0', 10);
-    const pendingCount = Number.isNaN(currentCount) ? 1 : currentCount + 1;
-    await this.env.VERITAS_KV.put('vdc:pending:count', pendingCount.toString());
-
-    return pendingCount;
+    return await this.persistPendingTransaction(transaction);
   }
 
   /**
    * Mine a new block with pending transactions
    */
   async mineBlock(): Promise<VDCBlock> {
-    // Get pending transactions
-    const pendingList = await this.env.VERITAS_KV.list({ prefix: 'vdc:pending:' });
-    const transactions: VDCTransaction[] = [];
-
-    for (const key of pendingList.keys) {
-      if (key.name === 'vdc:pending:count') continue;
-      
-      const txData = await this.env.VERITAS_KV.get(key.name);
-      if (txData) {
-        transactions.push(JSON.parse(txData));
-      }
-    }
+    // Get pending transactions from R2 storage
+    const transactions = await this.fetchPendingTransactions();
 
     if (transactions.length === 0) {
       throw new Error('No pending transactions to mine');
@@ -572,24 +577,15 @@ export class VDCBlockchain {
           getSystemDilithiumPrivateKey(this.env)
         );
 
-    // Upload to IPFS (optional for now)
-    const blockJson = JSON.stringify(block, null, 2);
-    try {
-      const ipfsRecord = await createIPFSRecord(this.ipfsClient, blockJson, 'application/json');
-      block.ipfsHash = ipfsRecord.hash;
-    } catch (error) {
-      console.warn('IPFS upload failed, using mock hash:', error);
-      block.ipfsHash = 'QmMockBlock' + blockNumber + Date.now();
-    }
-
-    // Store block in KV
-    await this.env.VERITAS_KV.put(`vdc:block:${blockNumber}`, JSON.stringify(block));
+    const finalBlock = await this.persistBlock(block, {
+      type: 'standard'
+    });
     
     // Update latest pointer
     await this.env.VERITAS_KV.put('vdc:latest', JSON.stringify({
       blockNumber,
-      hash: block.hash,
-      ipfsHash: block.ipfsHash,
+      hash: finalBlock.hash,
+      ipfsHash: finalBlock.ipfsHash,
       timestamp
     }));
 
@@ -614,18 +610,15 @@ export class VDCBlockchain {
       }
     }
 
-    // Clear pending transactions
-    for (const key of pendingList.keys) {
-      await this.env.VERITAS_KV.delete(key.name);
-    }
-    await this.env.VERITAS_KV.put('vdc:pending:count', '0');
+    // Clear pending transactions from R2 storage
+    await this.clearPendingTransactions();
 
     console.log(`🎉 VDC: Block ${blockNumber} mined!`);
-    console.log(`   Hash: ${block.hash}`);
-    console.log(`   IPFS: ${block.ipfsHash}`);
+    console.log(`   Hash: ${finalBlock.hash}`);
+    console.log(`   IPFS: ${finalBlock.ipfsHash}`);
     console.log(`   Transactions: ${transactions.length}`);
 
-    return block;
+    return finalBlock;
   }
 
   /**
@@ -809,6 +802,279 @@ export class VDCBlockchain {
       hash = hash & hash; // Convert to 32-bit integer
     }
     return Math.abs(hash).toString(16).padStart(8, '0');
+  }
+
+  private get storageBucket(): R2Bucket | null {
+    return this.env.VDC_STORAGE || null;
+  }
+
+  private getPendingKey(txId: string): string {
+    return `${this.pendingPrefix}${txId}.json`;
+  }
+
+  private getBlockKey(blockNumber: number): string {
+    return `${this.blockPrefix}${blockNumber}.json`;
+  }
+
+  private async parsePendingTransactionObject(object: R2ObjectBody | null): Promise<VDCTransaction | null> {
+    if (!object) {
+      return null;
+    }
+
+    const raw = await object.text();
+    if (!raw) {
+      return null;
+    }
+
+    // Attempt to decrypt with system Kyber key (new format)
+    try {
+      const decrypted = await this.maataraClient.decryptData(raw, getSystemKyberPrivateKey(this.env));
+      return JSON.parse(decrypted) as VDCTransaction;
+    } catch (decryptError) {
+      try {
+        return JSON.parse(raw) as VDCTransaction;
+      } catch (parseError) {
+        console.error('Failed to parse pending transaction payload from R2', {
+          decryptError,
+          parseError
+        });
+        return null;
+      }
+    }
+  }
+
+  private async persistBlock(block: VDCBlock, options: { type: 'genesis' | 'standard' }): Promise<VDCBlock> {
+    const payloadForIpfs = JSON.stringify(block, null, 2);
+    let ipfsRecord: IPFSRecord | null = null;
+
+    try {
+      ipfsRecord = await createIPFSRecord(this.ipfsClient, payloadForIpfs, 'application/json');
+      block.ipfsHash = ipfsRecord.hash;
+    } catch (error) {
+      console.warn(`IPFS upload for block ${block.blockNumber} failed, using placeholder`, error);
+      block.ipfsHash = `QmMockBlock${block.blockNumber}_${Date.now()}`;
+    }
+
+    // Primary storage in KV for low-latency access
+    await this.env.VERITAS_KV.put(`vdc:block:${block.blockNumber}`, JSON.stringify(block));
+
+    const bucket = this.storageBucket;
+
+    if (bucket) {
+      const r2Key = this.getBlockKey(block.blockNumber);
+      try {
+        const storedAt = Date.now();
+        await bucket.put(r2Key, JSON.stringify(block, null, 2), {
+          httpMetadata: {
+            contentType: 'application/json'
+          },
+          customMetadata: {
+            blockNumber: block.blockNumber.toString(),
+            blockType: options.type,
+            hash: block.hash
+          }
+        });
+
+        block.storage = {
+          r2Key,
+          storedAt,
+          ipfsHash: block.ipfsHash,
+          ipfsGatewayUrl: block.ipfsHash ? this.ipfsClient.getIPFSUrl(block.ipfsHash) : undefined,
+          ipfsPinned: !!ipfsRecord?.isPinned
+        };
+
+        // Persist block again so KV copy includes storage metadata
+        await this.env.VERITAS_KV.put(`vdc:block:${block.blockNumber}`, JSON.stringify(block));
+      } catch (error) {
+        console.warn(`Failed to archive block ${block.blockNumber} to R2`, error);
+      }
+    } else {
+      console.warn('VDC_STORAGE binding not configured; skipping R2 archival for block');
+    }
+
+    return block;
+  }
+
+  private async persistPendingTransaction(transaction: VDCTransaction): Promise<number> {
+    const pendingKey = this.getPendingKey(transaction.id);
+    const storedAt = Date.now();
+    let pendingCount = parseInt(await this.env.VERITAS_KV.get('vdc:pending:count') || '0', 10);
+    pendingCount = Number.isNaN(pendingCount) ? 0 : pendingCount;
+
+    const bucket = this.storageBucket;
+
+    if (bucket) {
+      const encryption: EncryptionMetadata = {
+        algorithm: 'kyber768-aes256gcm',
+        version: '1.0',
+        keyId: this.env.SYSTEM_KEY_ID || 'system',
+        source: 'system'
+      };
+
+      const storedTransaction: VDCTransaction = {
+        ...transaction,
+        storage: {
+          r2Key: pendingKey,
+          storedAt,
+          encryption
+        }
+      };
+
+      const systemKyberPublicKey = this.env.SYSTEM_KYBER_PUBLIC_KEY;
+      if (!systemKyberPublicKey) {
+        throw new Error('System Kyber public key not configured');
+      }
+
+      const encryptedPayload = await this.maataraClient.encryptData(
+        JSON.stringify(storedTransaction),
+        systemKyberPublicKey
+      );
+
+      await bucket.put(pendingKey, encryptedPayload, {
+        httpMetadata: {
+          contentType: 'application/json'
+        },
+        customMetadata: {
+          txId: transaction.id,
+          txType: transaction.type,
+          timestamp: transaction.timestamp.toString(),
+          encryption_algorithm: encryption.algorithm,
+          encryption_version: encryption.version,
+          encryption_key_id: encryption.keyId || 'system'
+        }
+      });
+
+      transaction.storage = storedTransaction.storage;
+
+      // Clean up any legacy KV entry to avoid duplication
+      await this.env.VERITAS_KV.delete(`vdc:pending:${transaction.id}`);
+    } else {
+      console.warn('VDC_STORAGE binding not configured; storing pending transaction in KV as fallback');
+      await this.env.VERITAS_KV.put(`vdc:pending:${transaction.id}`, JSON.stringify(transaction));
+    }
+
+    pendingCount += 1;
+    await this.env.VERITAS_KV.put('vdc:pending:count', pendingCount.toString());
+
+    return pendingCount;
+  }
+
+  private async fetchPendingTransactions(): Promise<VDCTransaction[]> {
+    const transactions: VDCTransaction[] = [];
+    const seen = new Set<string>();
+
+    const bucket = this.storageBucket;
+
+    if (bucket) {
+      const list = await bucket.list({ prefix: this.pendingPrefix });
+      for (const object of list.objects) {
+        const item = await bucket.get(object.key);
+        if (!item) continue;
+
+        try {
+          const parsed = await this.parsePendingTransactionObject(item);
+          if (!parsed) continue;
+          transactions.push(parsed);
+          seen.add(parsed.id);
+        } catch (error) {
+          console.error(`Failed to parse pending transaction from R2 key ${object.key}`, error);
+        }
+      }
+    }
+
+    // Include legacy KV entries if any remain
+    const legacyList = await this.env.VERITAS_KV.list({ prefix: 'vdc:pending:' });
+    for (const key of legacyList.keys) {
+      if (key.name === 'vdc:pending:count') continue;
+      const value = await this.env.VERITAS_KV.get(key.name);
+      if (!value) continue;
+
+      try {
+        const parsed = JSON.parse(value) as VDCTransaction;
+        if (!seen.has(parsed.id)) {
+          transactions.push(parsed);
+        } else {
+          // Remove duplicate KV entry now that R2 copy exists
+          await this.env.VERITAS_KV.delete(key.name);
+        }
+      } catch (error) {
+        console.error(`Failed to parse pending transaction from KV key ${key.name}`, error);
+      }
+    }
+
+    transactions.sort((a, b) => a.timestamp - b.timestamp);
+
+    return transactions;
+  }
+
+  private async clearPendingTransactions(): Promise<void> {
+    const bucket = this.storageBucket;
+
+    if (bucket) {
+      const list = await bucket.list({ prefix: this.pendingPrefix });
+      for (const object of list.objects) {
+        await bucket.delete(object.key);
+      }
+    }
+
+    const legacyList = await this.env.VERITAS_KV.list({ prefix: 'vdc:pending:' });
+    for (const key of legacyList.keys) {
+      if (key.name === 'vdc:pending:count') continue;
+      await this.env.VERITAS_KV.delete(key.name);
+    }
+
+    await this.env.VERITAS_KV.put('vdc:pending:count', '0');
+  }
+
+  async getPendingTransactions(): Promise<VDCTransaction[]> {
+    return await this.fetchPendingTransactions();
+  }
+
+  async removePendingTransaction(txId: string): Promise<{ transaction: VDCTransaction | null; remainingCount: number }> {
+    let removed: VDCTransaction | null = null;
+
+    const bucket = this.storageBucket;
+
+    if (bucket) {
+      const key = this.getPendingKey(txId);
+      const object = await bucket.get(key);
+      if (object) {
+        try {
+          removed = await this.parsePendingTransactionObject(object);
+        } catch (error) {
+          console.error(`Failed to parse R2 pending transaction ${txId}`, error);
+        }
+        await bucket.delete(key);
+      }
+    }
+
+    if (!removed) {
+      const kvKey = `vdc:pending:${txId}`;
+      const legacyData = await this.env.VERITAS_KV.get(kvKey);
+      if (legacyData) {
+        try {
+          removed = JSON.parse(legacyData) as VDCTransaction;
+        } catch (error) {
+          console.error(`Failed to parse legacy pending transaction ${txId}`, error);
+        }
+        await this.env.VERITAS_KV.delete(kvKey);
+      }
+    }
+
+    let remainingCount = parseInt(await this.env.VERITAS_KV.get('vdc:pending:count') || '0', 10);
+    remainingCount = Number.isNaN(remainingCount) ? 0 : remainingCount;
+
+    if (removed) {
+      remainingCount = Math.max(0, remainingCount - 1);
+      await this.env.VERITAS_KV.put('vdc:pending:count', remainingCount.toString());
+    } else {
+      // Recompute count to ensure consistency
+      const pending = await this.fetchPendingTransactions();
+      remainingCount = pending.length;
+      await this.env.VERITAS_KV.put('vdc:pending:count', remainingCount.toString());
+    }
+
+    return { transaction: removed, remainingCount };
   }
 
   /**

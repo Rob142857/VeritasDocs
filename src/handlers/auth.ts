@@ -2,11 +2,11 @@ import { Hono } from 'hono';
 import { Environment, OneTimeLink, User, APIResponse } from '../types';
 import { MaataraClient, generateId, generateMnemonic } from '../utils/crypto';
 import { initializeVDC, addUserToVDC } from '../utils/blockchain';
+import { loadActivationLink, storeActivationLink } from '../utils/activation';
 
 const authHandler = new Hono<{ Bindings: Environment }>();
 
 const SESSION_TTL_MS = 12 * 60 * 60 * 1000; // 12 hours
-
 interface SessionRecord {
   userId: string;
   expiresAt: number;
@@ -137,13 +137,11 @@ authHandler.get('/token-info', async (c) => {
       return c.json<APIResponse>({ success: false, error: 'Token is required' }, 400);
     }
     
-    // Get one-time link
-    const linkData = await env.VERITAS_KV.get(`link:${token}`);
-    if (!linkData) {
+    // Get one-time link from R2 (with KV fallback)
+    const oneTimeLink = await loadActivationLink(env, token);
+    if (!oneTimeLink) {
       return c.json<APIResponse>({ success: false, error: 'Invalid or expired token' }, 400);
     }
-
-    const oneTimeLink: OneTimeLink = JSON.parse(linkData);
 
     if (oneTimeLink.used) {
       return c.json<APIResponse>({ success: false, error: 'Token has already been used' }, 400);
@@ -193,7 +191,7 @@ authHandler.post('/create-link', async (c) => {
       used: false,
     };
 
-    await env.VERITAS_KV.put(`link:${token}`, JSON.stringify(oneTimeLink));
+  await storeActivationLink(env, oneTimeLink);
 
     const activationUrl = `${c.req.url.split('/api')[0]}/activate?token=${token}`;
 
@@ -240,7 +238,7 @@ authHandler.post('/create-link-admin', async (c) => {
       used: false,
     };
 
-    await env.VERITAS_KV.put(`link:${token}`, JSON.stringify(oneTimeLink));
+  await storeActivationLink(env, oneTimeLink);
 
     const activationUrl = `${c.req.url.split('/api')[0]}/activate?token=${token}`;
 
@@ -282,10 +280,7 @@ authHandler.post('/send-invite', async (c) => {
       return c.json<APIResponse>({ success: false, error: 'User with this email already exists' }, 400);
     }
 
-    // Check if invitation already exists
-    const existingInvitePattern = `link:*`;
-    // Note: In production, you'd want to scan for existing invites to this email
-    // For now, we'll just create a new one
+  // TODO: Optionally scan existing invites for this email
 
     const linkId = generateId();
     const token = crypto.randomUUID();
@@ -301,7 +296,7 @@ authHandler.post('/send-invite', async (c) => {
       used: false,
     };
 
-    await env.VERITAS_KV.put(`link:${token}`, JSON.stringify(oneTimeLink));
+  await storeActivationLink(env, oneTimeLink);
 
     const activationUrl = `${c.req.url.split('/api')[0]}/activate?token=${token}`;
 
@@ -341,12 +336,10 @@ authHandler.post('/activate', async (c) => {
     }
 
     // Get one-time link
-    const linkData = await env.VERITAS_KV.get(`link:${token}`);
-    if (!linkData) {
+    const oneTimeLink = await loadActivationLink(env, token);
+    if (!oneTimeLink) {
       return c.json<APIResponse>({ success: false, error: 'Invalid or expired token' }, 400);
     }
-
-    const oneTimeLink: OneTimeLink = JSON.parse(linkData);
 
     if (oneTimeLink.used) {
       return c.json<APIResponse>({ success: false, error: 'Token has already been used' }, 400);
@@ -447,7 +440,7 @@ authHandler.post('/activate', async (c) => {
     // Mark link as used
     oneTimeLink.used = true;
     oneTimeLink.usedAt = Date.now();
-    await env.VERITAS_KV.put(`link:${token}`, JSON.stringify(oneTimeLink));
+  await storeActivationLink(env, oneTimeLink);
 
     return c.json<APIResponse>({
       success: true,

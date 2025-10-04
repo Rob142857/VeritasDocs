@@ -1,8 +1,8 @@
 // Enhanced assets handler with IPFS and Ethereum anchoring
 import { Hono } from 'hono';
-import { Environment, Asset, User, APIResponse } from '../types';
+import { Environment, Asset, User, APIResponse, EncryptionMetadata } from '../types';
 import { MaataraClient, hashString } from '../utils/crypto';
-import { IPFSClient, createIPFSRecord } from '../utils/ipfs';
+import { IPFSClient, createIPFSRecord, IPFSRecord } from '../utils/ipfs';
 import { EthereumAnchoringClient, anchorDocumentsToEthereum } from '../utils/ethereum';
 
 const enhancedAssetHandler = new Hono<{ Bindings: Environment }>();
@@ -70,6 +70,12 @@ enhancedAssetHandler.post('/create-web3', async (c) => {
     const user: User = JSON.parse(userData);
     console.log('User found:', user.email);
 
+    const userKyberPublicKey = user.kyberPublicKey || user.publicKey;
+    if (!userKyberPublicKey) {
+      console.error('User record missing Kyber public key');
+      return c.json<APIResponse>({ success: false, error: 'User encryption key unavailable' }, 500);
+    }
+
     // Verify the client-side signature
     console.log('Verifying client signature...');
     const isSignatureValid = await maataraClient.verifySignature(
@@ -95,26 +101,73 @@ enhancedAssetHandler.post('/create-web3', async (c) => {
     console.log('Ethereum client initialized');
 
     // 1. Document data should already be encrypted client-side
-    console.log('Using client-side encrypted document data...');
-    let encryptedData = documentData;
-    
-    // Check if data is already encrypted (has our encryption format)
-    try {
-      const parsed = JSON.parse(documentData);
-      if (parsed.encrypted && parsed.ciphertext) {
-        console.log('Data is already encrypted client-side');
-        encryptedData = documentData;
-      } else {
-        console.warn('Data does not appear to be encrypted, wrapping as-is');
-        encryptedData = JSON.stringify({ plaintext: documentData, encrypted: false });
+    console.log('Ensuring document payload is Kyber-encrypted before storage...');
+
+    const safeParseJson = (value: string): any | null => {
+      try {
+        return JSON.parse(value);
+      } catch (err) {
+        return null;
       }
-    } catch (e) {
-      console.warn('Data is not JSON, treating as plaintext');
-      encryptedData = JSON.stringify({ plaintext: documentData, encrypted: false });
+    };
+
+    const isKyberEnvelope = (payload: any): boolean => {
+      return !!payload && typeof payload === 'object' &&
+        typeof payload.algorithm === 'string' &&
+        typeof payload.ciphertext === 'string' &&
+        typeof payload.kem_ct === 'string' &&
+        typeof payload.iv === 'string';
+    };
+
+    let encryptedData: string | null = null;
+    let encryptionSource: 'client' | 'server' = 'client';
+    let plaintextPayload: string | null = null;
+
+    const parsedDocument = safeParseJson(documentData);
+
+    if (parsedDocument && isKyberEnvelope(parsedDocument)) {
+      encryptedData = documentData;
+    } else if (parsedDocument && parsedDocument.encrypted === true && isKyberEnvelope(parsedDocument)) {
+      encryptedData = documentData;
+    } else if (parsedDocument && parsedDocument.encrypted === false && typeof parsedDocument.plaintext === 'string') {
+      const nested = safeParseJson(parsedDocument.plaintext);
+      if (nested && isKyberEnvelope(nested)) {
+        encryptedData = parsedDocument.plaintext;
+      } else {
+        plaintextPayload = parsedDocument.plaintext;
+      }
+    } else if (parsedDocument && typeof parsedDocument.plaintext === 'string') {
+      plaintextPayload = parsedDocument.plaintext;
+    } else if (parsedDocument && isKyberEnvelope(parsedDocument.data)) {
+      encryptedData = JSON.stringify(parsedDocument.data);
+    } else if (parsedDocument) {
+      plaintextPayload = JSON.stringify(parsedDocument);
+    } else {
+      plaintextPayload = documentData;
     }
 
+    if (!encryptedData) {
+      encryptionSource = 'server';
+      const payloadToEncrypt = plaintextPayload ?? documentData;
+      encryptedData = await maataraClient.encryptData(payloadToEncrypt, userKyberPublicKey);
+    }
+
+    if (!encryptedData) {
+      console.error('Failed to prepare encrypted document payload');
+      return c.json<APIResponse>({ success: false, error: 'Unable to encrypt document' }, 500);
+    }
+
+    console.log(`Document encryption source: ${encryptionSource}`);
+
+    // Precompute asset identifier for storage coordination
+    const assetId = `asset_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
+    // Pre-compute document size for storage metadata
+  const documentBuffer = new TextEncoder().encode(encryptedData);
+    const documentSize = documentBuffer.length;
+
     // 2. Upload encrypted data to IPFS via Cloudflare (skip if Pinata not configured)
-    let ipfsRecord;
+    let ipfsRecord: IPFSRecord;
     try {
       ipfsRecord = await createIPFSRecord(
         ipfsClient,
@@ -124,16 +177,21 @@ enhancedAssetHandler.post('/create-web3', async (c) => {
     } catch (ipfsError) {
       // IPFS upload failed (likely Pinata not configured), use placeholder hash
       console.warn('IPFS upload failed, using placeholder:', ipfsError);
+      const placeholderTimestamp = Date.now();
+      const placeholderHash = `placeholder_${placeholderTimestamp}`;
       ipfsRecord = {
-        hash: `placeholder_${Date.now()}`,
-        size: encryptedData.length,
-        timestamp: Date.now()
+        hash: placeholderHash,
+        size: documentSize,
+        contentType: 'application/json',
+        timestamp: placeholderTimestamp,
+        isPinned: false,
+        gatewayUrl: ipfsClient.getIPFSUrl(placeholderHash)
       };
     }
 
     // 3. Create asset metadata for blockchain anchoring
     const assetMetadata = {
-      id: `asset_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      id: assetId,
       title,
       description,
       documentType,
@@ -162,7 +220,49 @@ enhancedAssetHandler.post('/create-web3', async (c) => {
       };
     }
 
-    // 5. Create Ethereum anchor placeholder (client-side anchoring not implemented yet)
+    // 5. Store encrypted document in R2 for durable, low-latency retrieval
+    const storageBucket = env.VDC_STORAGE;
+    if (!storageBucket) {
+      console.error('VDC_STORAGE binding is not configured. Cannot persist encrypted document.');
+      return c.json<APIResponse>({ success: false, error: 'Document storage not configured' }, 500);
+    }
+
+    const documentStoredAt = Date.now();
+    const documentKey = `documents/${userId}/${assetId}.json`;
+
+    const storageEncryptionMetadata: EncryptionMetadata = {
+      algorithm: 'kyber768-aes256gcm',
+      version: '1.0',
+      keyId: user.id,
+      source: encryptionSource
+    };
+
+    await storageBucket.put(documentKey, encryptedData, {
+      httpMetadata: {
+        contentType: 'application/json'
+      },
+      customMetadata: {
+        assetId,
+        userId,
+        documentType: documentType || 'other',
+        encryption_algorithm: storageEncryptionMetadata.algorithm,
+        encryption_version: storageEncryptionMetadata.version,
+        encryption_source: storageEncryptionMetadata.source,
+        encryption_owner: user.id
+      }
+    });
+
+    const assetStorage = {
+      documentR2Key: documentKey,
+      storedAt: documentStoredAt,
+      size: documentSize,
+      ipfsHash: ipfsRecord.hash,
+      ipfsGatewayUrl: ipfsRecord.gatewayUrl || ipfsClient.getIPFSUrl(ipfsRecord.hash),
+      ipfsPinned: !!ipfsRecord.isPinned,
+      encryption: storageEncryptionMetadata
+    } as Asset['storage'];
+
+    // 6. Create Ethereum anchor placeholder (client-side anchoring not implemented yet)
     let ethereumAnchor;
     try {
       // TODO: Implement client-side Ethereum anchoring with user signature
@@ -184,12 +284,12 @@ enhancedAssetHandler.post('/create-web3', async (c) => {
       };
     }
 
-    // 6. Use the verified client signature
+    // 7. Use the verified client signature
 
-    // 7. Generate unique token ID
+    // 8. Generate unique token ID
     const tokenId = `VRT_${Date.now()}_${Math.random().toString(36).substr(2, 6).toUpperCase()}`;
 
-    // 8. Create final asset record
+    // 9. Create final asset record
     const asset: Asset = {
       id: assetMetadata.id,
       tokenId,
@@ -199,7 +299,6 @@ enhancedAssetHandler.post('/create-web3', async (c) => {
       description,
       documentType,
       ipfsHash: ipfsRecord.hash,
-      encryptedData: encryptedData,
       signature,
       createdAt: Date.now(),
       updatedAt: Date.now(),
@@ -208,21 +307,22 @@ enhancedAssetHandler.post('/create-web3', async (c) => {
       // Web3 integration fields
       merkleRoot: ethereumAnchor.anchorHash,
       ethereumTxHash: ethereumAnchor.ethereumTxHash,
-      ipfsMetadataHash: metadataRecord.hash
+      ipfsMetadataHash: metadataRecord.hash,
+      storage: assetStorage
     };
 
-    // 9. Store asset in KV with pending payment status
+    // 10. Store asset in KV with pending payment status
     asset.paymentStatus = 'pending';
     await env.VERITAS_KV.put(`asset:${asset.id}`, JSON.stringify(asset));
 
-    // 10. Add asset to user's pending assets list (will move to owned after payment)
+    // 11. Add asset to user's pending assets list (will move to owned after payment)
     const userPendingAssetsKey = `user_pending_assets:${userId}`;
     const existingPendingAssets = await env.VERITAS_KV.get(userPendingAssetsKey);
     const pendingAssetsList = existingPendingAssets ? JSON.parse(existingPendingAssets) : [];
     pendingAssetsList.push(asset.id);
     await env.VERITAS_KV.put(userPendingAssetsKey, JSON.stringify(pendingAssetsList));
 
-    // 11. Create REAL Stripe checkout session for $25 payment
+    // 12. Create REAL Stripe checkout session for $25 payment
     console.log('Creating Stripe checkout session...');
     const Stripe = (await import('stripe')).default;
     const stripe = new Stripe(env.STRIPE_SECRET_KEY, {
@@ -419,8 +519,30 @@ enhancedAssetHandler.post('/web3/:assetId/decrypt', async (c) => {
     const maataraClient = new MaataraClient(env);
     const ipfsClient = new IPFSClient(env);
 
-    // Retrieve encrypted data from IPFS
-    const encryptedData = await ipfsClient.retrieveFromIPFS(asset.ipfsHash);
+    // Retrieve encrypted data from R2 first, fallback to IPFS
+    let encryptedData: string | null = null;
+
+    if (asset.storage?.documentR2Key && env.VDC_STORAGE) {
+      try {
+        const r2Object = await env.VDC_STORAGE.get(asset.storage.documentR2Key);
+        if (r2Object) {
+          encryptedData = await r2Object.text();
+        }
+      } catch (error) {
+        console.warn(`Failed to fetch encrypted document from R2 for asset ${asset.id}`, error);
+      }
+    }
+
+    if (!encryptedData) {
+      encryptedData = await ipfsClient.retrieveFromIPFS(asset.ipfsHash);
+    }
+
+    if (!encryptedData) {
+      return c.json<APIResponse>({
+        success: false,
+        error: 'Encrypted document could not be retrieved'
+      }, 500);
+    }
 
     // Decrypt the document data
     const decryptedData = await maataraClient.decryptData(encryptedData, privateKey);

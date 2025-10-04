@@ -631,33 +631,203 @@ class VeritasApp {
 
   async loadUserAssets() {
     try {
-      const response = await fetch(`/api/assets/user/${this.currentUser.id}`);
+      const response = await fetch(`/api/web3-assets/user/${this.currentUser.id}`);
       const result = await response.json();
       
       const container = document.getElementById('user-assets');
-      if (result.success && result.data.assets.length > 0) {
-        container.innerHTML = result.data.assets.map(asset => `
+      if (result.success && (result.data.pending?.length > 0 || result.data.confirmed?.length > 0)) {
+        const allAssets = [...(result.data.pending || []), ...(result.data.confirmed || [])];
+        
+        container.innerHTML = allAssets.map(asset => `
           <div class="asset-card">
-            <div class="asset-type">${asset.documentType}</div>
+            <div class="asset-type">${asset.documentType || 'unknown'}</div>
             <div class="asset-title">${asset.title}</div>
-            <div class="asset-description">${asset.description}</div>
+            <div class="asset-description">${asset.description || ''}</div>
             <div class="asset-meta">
               <span>Token: ${asset.tokenId}</span>
               <span>${new Date(asset.createdAt).toLocaleDateString()}</span>
+              <span class="badge ${asset.status === 'confirmed' ? 'badge-success' : 'badge-warning'}">${asset.status || asset.paymentStatus}</span>
+            </div>
+            <div class="asset-actions" style="margin-top: 1rem; display: flex; gap: 0.5rem;">
+              <button class="btn btn-secondary btn-sm" onclick="app.decryptAsset('${asset.id}')">🔓 Decrypt</button>
+              <button class="btn btn-secondary btn-sm" onclick="app.downloadAsset('${asset.id}')">💾 Download</button>
             </div>
           </div>
         `).join('');
         
-        document.getElementById('owned-count').textContent = result.data.assets.filter(a => a.ownerId === this.currentUser.id).length;
-        document.getElementById('created-count').textContent = result.data.assets.filter(a => a.creatorId === this.currentUser.id).length;
+        document.getElementById('owned-count').textContent = result.data.confirmed?.length || 0;
+        document.getElementById('created-count').textContent = allAssets.length;
       } else {
         container.innerHTML = '<p class="text-center text-muted">No assets found. Create your first asset to get started!</p>';
         document.getElementById('owned-count').textContent = '0';
         document.getElementById('created-count').textContent = '0';
       }
     } catch (error) {
+      console.error('Failed to load assets:', error);
       document.getElementById('user-assets').innerHTML = '<div class="alert alert-error">Failed to load assets</div>';
     }
+  }
+
+  async decryptAsset(assetId) {
+    try {
+      // Prompt for Kyber private key
+      const kyberPrivateKey = prompt('Enter your Kyber private key to decrypt this document:');
+      if (!kyberPrivateKey) return;
+
+      this.showAlert('info', 'Decrypting document...');
+
+      // Initialize crypto
+      await window.VeritasCrypto.ensureCryptoReady();
+
+      // Call decrypt endpoint
+      const response = await fetch(`/api/web3-assets/web3/${assetId}/decrypt`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ privateKey: kyberPrivateKey })
+      });
+
+      const result = await response.json();
+
+      if (result.success) {
+        const documentData = result.data.documentData;
+        const asset = result.data.asset;
+
+        // Display in modal
+        this.showDocumentModal(asset, documentData);
+      } else {
+        this.showAlert('error', result.error || 'Decryption failed');
+      }
+    } catch (error) {
+      console.error('Decryption error:', error);
+      this.showAlert('error', 'Decryption failed: ' + error.message);
+    }
+  }
+
+  async downloadAsset(assetId) {
+    try {
+      // Prompt for Kyber private key
+      const kyberPrivateKey = prompt('Enter your Kyber private key to download this document:');
+      if (!kyberPrivateKey) return;
+
+      this.showAlert('info', 'Decrypting and preparing download...');
+
+      // Initialize crypto
+      await window.VeritasCrypto.ensureCryptoReady();
+
+      // Call decrypt endpoint
+      const response = await fetch(`/api/web3-assets/web3/${assetId}/decrypt`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ privateKey: kyberPrivateKey })
+      });
+
+      const result = await response.json();
+
+      if (result.success) {
+        const documentData = result.data.documentData;
+        const asset = result.data.asset;
+
+        // Create download
+        const blob = new Blob([JSON.stringify(documentData, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `${asset.title.replace(/[^a-z0-9]/gi, '_')}_${asset.id}.json`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+
+        this.showAlert('success', 'Document downloaded successfully!');
+      } else {
+        this.showAlert('error', result.error || 'Download failed');
+      }
+    } catch (error) {
+      console.error('Download error:', error);
+      this.showAlert('error', 'Download failed: ' + error.message);
+    }
+  }
+
+  showDocumentModal(asset, documentData) {
+    const modal = document.createElement('div');
+    modal.className = 'modal';
+    
+    // Detect document type
+    let contentDisplay = '';
+    let canRender = false;
+    
+    if (typeof documentData === 'string') {
+      // Try to render as text
+      canRender = true;
+      contentDisplay = `<pre style="white-space: pre-wrap; max-height: 400px; overflow-y: auto; background: #f5f5f5; padding: 1rem; border-radius: 8px;">${this.escapeHtml(documentData)}</pre>`;
+    } else if (typeof documentData === 'object') {
+      // Render as formatted JSON
+      canRender = true;
+      contentDisplay = `<pre style="white-space: pre-wrap; max-height: 400px; overflow-y: auto; background: #f5f5f5; padding: 1rem; border-radius: 8px;">${this.escapeHtml(JSON.stringify(documentData, null, 2))}</pre>`;
+    }
+
+    modal.innerHTML = `
+      <div class="modal-content" style="max-width: 800px;">
+        <div class="modal-header">
+          <h3 class="modal-title">🔓 ${this.escapeHtml(asset.title)}</h3>
+          <button class="modal-close" onclick="this.closest('.modal').remove()">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div class="alert alert-success">
+            <strong>✅ Document Decrypted Successfully</strong>
+          </div>
+          
+          <div style="margin-bottom: 1rem;">
+            <strong>Asset ID:</strong> ${asset.id}<br>
+            <strong>Token ID:</strong> ${asset.tokenId}<br>
+            <strong>Document Type:</strong> ${asset.documentType}
+          </div>
+
+          ${canRender ? `
+            <div style="margin-bottom: 1rem;">
+              <strong>Document Content:</strong>
+            </div>
+            ${contentDisplay}
+          ` : `
+            <div class="alert alert-warning">
+              <strong>⚠️ Cannot display this file type</strong>
+              <p>Use the download button below to save the file.</p>
+            </div>
+          `}
+
+          <div style="display: flex; gap: 1rem; margin-top: 1.5rem;">
+            <button class="btn btn-primary" onclick="app.downloadAssetFromModal('${asset.id}', '${this.escapeHtml(asset.title)}', ${JSON.stringify(documentData).replace(/'/g, "&#39;")})">
+              💾 Download Document
+            </button>
+            <button class="btn btn-secondary" onclick="this.closest('.modal').remove()">
+              Close
+            </button>
+          </div>
+        </div>
+      </div>
+    `;
+
+    document.body.appendChild(modal);
+  }
+
+  downloadAssetFromModal(assetId, title, documentData) {
+    const blob = new Blob([JSON.stringify(documentData, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `${title.replace(/[^a-z0-9]/gi, '_')}_${assetId}.json`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+    
+    this.showAlert('success', 'Document downloaded!');
+  }
+
+  escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
   }
 
   async handleSearch() {
@@ -920,6 +1090,8 @@ ${this.currentUser.email}`;
 }
 
 // Initialize the application
+let app;
 document.addEventListener('DOMContentLoaded', () => {
-  new VeritasApp();
+  app = new VeritasApp();
+  window.app = app; // Make available globally for inline onclick handlers
 });

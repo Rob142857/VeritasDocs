@@ -223,6 +223,197 @@ export async function hashData(data: string): Promise<string> {
     .join('');
 }
 
+// ============================================================================
+// KEYPACK UTILITIES - Passphrase-protected key storage
+// ============================================================================
+
+export interface Keypack {
+  version: string;
+  email: string;
+  timestamp: number;
+  keyType: string;
+  keys: {
+    kyber: {
+      public: string;
+      private: string;
+    };
+    dilithium: {
+      public: string;
+      private: string;
+    };
+  };
+}
+
+// Generate 12-word BIP39 passphrase
+export async function generatePassphrase(): Promise<string> {
+  // Use simple wordlist for demo (in production, use full BIP39 wordlist)
+  const words = [
+    'abandon', 'ability', 'able', 'about', 'above', 'absent', 'absorb', 'abstract', 
+    'absurd', 'abuse', 'access', 'accident', 'account', 'accuse', 'achieve', 'acid',
+    'acoustic', 'acquire', 'across', 'act', 'action', 'actor', 'actress', 'actual',
+    'adapt', 'add', 'addict', 'address', 'adjust', 'admit', 'adult', 'advance',
+    'advice', 'aerobic', 'affair', 'afford', 'afraid', 'again', 'age', 'agent',
+    'agree', 'ahead', 'aim', 'air', 'airport', 'aisle', 'alarm', 'album',
+    'alcohol', 'alert', 'alien', 'all', 'alley', 'allow', 'almost', 'alone',
+    'alpha', 'already', 'also', 'alter', 'always', 'amateur', 'amazing', 'among',
+    'amount', 'amused', 'analyst', 'anchor', 'ancient', 'anger', 'angle', 'angry',
+    'animal', 'ankle', 'announce', 'annual', 'another', 'answer', 'antenna', 'antique',
+    'anxiety', 'any', 'apart', 'apology', 'appear', 'apple', 'approve', 'april',
+    'arch', 'arctic', 'area', 'arena', 'argue', 'arm', 'armed', 'armor',
+    'army', 'around', 'arrange', 'arrest', 'arrive', 'arrow', 'art', 'artefact',
+    'artist', 'artwork', 'ask', 'aspect', 'assault', 'asset', 'assist', 'assume',
+    'asthma', 'athlete', 'atom', 'attack', 'attend', 'attitude', 'attract', 'auction',
+    'audit', 'august', 'aunt', 'author', 'auto', 'autumn', 'average', 'avocado',
+    'avoid', 'awake', 'aware', 'away', 'awesome', 'awful', 'awkward', 'axis',
+    'baby', 'bachelor', 'bacon', 'badge', 'bag', 'balance', 'balcony', 'ball',
+    'bamboo', 'banana', 'banner', 'bar', 'barely', 'bargain', 'barrel', 'base'
+  ];
+  
+  const mnemonic = [];
+  const randomBytes = new Uint8Array(16); // 128 bits for 12 words
+  crypto.getRandomValues(randomBytes);
+  
+  for (let i = 0; i < 12; i++) {
+    const randomIndex = randomBytes[i] % words.length;
+    mnemonic.push(words[randomIndex]);
+  }
+  
+  return mnemonic.join(' ');
+}
+
+// Derive AES-256 key from passphrase using PBKDF2
+export async function deriveKeyFromPassphrase(
+  passphrase: string,
+  salt: Uint8Array
+): Promise<CryptoKey> {
+  const encoder = new TextEncoder();
+  const passphraseBytes = encoder.encode(passphrase);
+  
+  // Import passphrase as base key
+  const baseKey = await crypto.subtle.importKey(
+    'raw',
+    passphraseBytes,
+    'PBKDF2',
+    false,
+    ['deriveKey']
+  );
+  
+  // Derive AES-256-GCM key using PBKDF2 (100k iterations)
+  const aesKey = await crypto.subtle.deriveKey(
+    {
+      name: 'PBKDF2',
+      salt: salt,
+      iterations: 100000, // High iteration count for security
+      hash: 'SHA-256'
+    },
+    baseKey,
+    { name: 'AES-GCM', length: 256 },
+    false,
+    ['encrypt', 'decrypt']
+  );
+  
+  return aesKey;
+}
+
+// Encrypt keypack with passphrase
+export async function encryptKeypack(
+  keypack: Keypack,
+  passphrase: string
+): Promise<{salt: string; iv: string; ciphertext: string}> {
+  await ensureCryptoReady();
+  
+  // Generate random salt (16 bytes)
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  
+  // Derive AES key from passphrase
+  const aesKey = await deriveKeyFromPassphrase(passphrase, salt);
+  
+  // Serialize keypack to JSON
+  const keypackJson = JSON.stringify(keypack);
+  const plaintext = new TextEncoder().encode(keypackJson);
+  
+  // Generate random IV (12 bytes for GCM)
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  
+  // Encrypt with AES-256-GCM
+  const ciphertext = await crypto.subtle.encrypt(
+    {
+      name: 'AES-GCM',
+      iv: iv,
+      tagLength: 128 // 128-bit auth tag
+    },
+    aesKey,
+    plaintext
+  );
+  
+  return {
+    salt: b64uEncode(salt),
+    iv: b64uEncode(iv),
+    ciphertext: b64uEncode(new Uint8Array(ciphertext))
+  };
+}
+
+// Decrypt keypack with passphrase
+export async function decryptKeypack(
+  encrypted: {salt: string; iv: string; ciphertext: string},
+  passphrase: string
+): Promise<Keypack> {
+  await ensureCryptoReady();
+  
+  try {
+    // Decode salt and IV
+    const salt = b64uDecode(encrypted.salt);
+    const iv = b64uDecode(encrypted.iv);
+    const ciphertext = b64uDecode(encrypted.ciphertext);
+    
+    // Derive AES key from passphrase
+    const aesKey = await deriveKeyFromPassphrase(passphrase, salt);
+    
+    // Decrypt with AES-256-GCM
+    const plaintext = await crypto.subtle.decrypt(
+      {
+        name: 'AES-GCM',
+        iv: iv,
+        tagLength: 128
+      },
+      aesKey,
+      ciphertext
+    );
+    
+    // Decode and parse keypack
+    const keypackJson = new TextDecoder().decode(plaintext);
+    return JSON.parse(keypackJson) as Keypack;
+  } catch (error) {
+    throw new Error('Incorrect passphrase or corrupted keypack file');
+  }
+}
+
+// Download keypack as .keypack file
+export function downloadKeypack(
+  email: string,
+  encrypted: {salt: string; iv: string; ciphertext: string}
+): void {
+  const keypackData = {
+    format: 'veritas-keypack-v1',
+    created: new Date().toISOString(),
+    email: email,
+    encrypted: encrypted
+  };
+  
+  const blob = new Blob([JSON.stringify(keypackData, null, 2)], {
+    type: 'application/octet-stream'
+  });
+  
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `veritas-${email.replace('@', '-at-').replace(/[^a-z0-9-]/gi, '')}.keypack`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
 // Make functions available globally for inline HTML usage
 (window as any).VeritasCrypto = {
   encryptDocumentData,
@@ -231,7 +422,12 @@ export async function hashData(data: string): Promise<string> {
   signData,
   verifySignature,
   ensureCryptoReady,
-  hashData
+  hashData,
+  // New keypack functions
+  generatePassphrase,
+  encryptKeypack,
+  decryptKeypack,
+  downloadKeypack
 };
 
 console.log('Veritas Crypto module loaded');

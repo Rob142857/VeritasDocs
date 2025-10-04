@@ -9,6 +9,7 @@ import { userHandler } from './handlers/users';
 import { stripeHandler } from './handlers/stripe';
 import { searchHandler } from './handlers/search';
 import vdcHandler from './handlers/vdc';
+import storageVerifyHandler from './handlers/storage-verify';
 import { MaataraClient } from './utils/crypto';
 
 type Bindings = Environment;
@@ -2538,6 +2539,7 @@ app.route('/api/stripe', stripeHandler);
 app.route('/api/search', searchHandler);
 app.route('/api/docs', docsHandler);
 app.route('/api/vdc', vdcHandler);
+app.route('/api/storage-verify', storageVerifyHandler);
 
 // HTML template for the SPA
 const appHTML = `

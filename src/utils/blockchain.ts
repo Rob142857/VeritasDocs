@@ -11,6 +11,7 @@
 import { Environment, EncryptionMetadata } from '../types';
 import { IPFSClient, createIPFSRecord, IPFSRecord } from './ipfs';
 import { MaataraClient } from './crypto';
+import { storeChainBlock } from './store';
 
 function getSystemDilithiumPrivateKey(env: Environment): string {
   if (env.SYSTEM_DILITHIUM_PRIVATE_KEY && env.SYSTEM_DILITHIUM_PRIVATE_KEY.length > 0) {
@@ -534,6 +535,8 @@ export class VDCBlockchain {
       throw new Error('No pending transactions to mine');
     }
 
+    console.log(`⛏️  Mining block with ${transactions.length} pending transactions...`);
+
     // Get previous block
     const latestData = await this.env.VERITAS_KV.get('vdc:latest');
     if (!latestData) {
@@ -572,14 +575,19 @@ export class VDCBlockchain {
       transactionCount: transactions.length
     };
 
-        block.blockSignature.signature = await this.maataraClient.signData(
-          JSON.stringify(blockDataToSign),
-          getSystemDilithiumPrivateKey(this.env)
-        );
+    block.blockSignature.signature = await this.maataraClient.signData(
+      JSON.stringify(blockDataToSign),
+      getSystemDilithiumPrivateKey(this.env)
+    );
 
+    // CRITICAL: Persist block FIRST (KV + R2 + IPFS) before clearing pending transactions
+    // This ensures data integrity - if storage fails, pending transactions remain intact
+    console.log(`💾 Persisting block #${blockNumber} to all storage tiers...`);
     const finalBlock = await this.persistBlock(block, {
       type: 'standard'
     });
+    
+    console.log(`✅ Block #${blockNumber} persisted successfully, now safe to clear pending transactions`);
     
     // Update latest pointer
     await this.env.VERITAS_KV.put('vdc:latest', JSON.stringify({
@@ -610,12 +618,14 @@ export class VDCBlockchain {
       }
     }
 
-    // Clear pending transactions from R2 storage
+    // NOW safe to clear pending transactions - block is durably stored in all tiers
+    console.log(`🧹 Clearing ${transactions.length} pending transactions from R2...`);
     await this.clearPendingTransactions();
 
-    console.log(`🎉 VDC: Block ${blockNumber} mined!`);
+    console.log(`🎉 VDC: Block ${blockNumber} mined successfully!`);
     console.log(`   Hash: ${finalBlock.hash}`);
     console.log(`   IPFS: ${finalBlock.ipfsHash}`);
+    console.log(`   R2: ${finalBlock.storage?.r2Key}`);
     console.log(`   Transactions: ${transactions.length}`);
 
     return finalBlock;
@@ -844,53 +854,29 @@ export class VDCBlockchain {
   }
 
   private async persistBlock(block: VDCBlock, options: { type: 'genesis' | 'standard' }): Promise<VDCBlock> {
-    const payloadForIpfs = JSON.stringify(block, null, 2);
-    let ipfsRecord: IPFSRecord | null = null;
-
-    try {
-      ipfsRecord = await createIPFSRecord(this.ipfsClient, payloadForIpfs, 'application/json');
-      block.ipfsHash = ipfsRecord.hash;
-    } catch (error) {
-      console.warn(`IPFS upload for block ${block.blockNumber} failed, using placeholder`, error);
-      block.ipfsHash = `QmMockBlock${block.blockNumber}_${Date.now()}`;
+    // Use unified storage layer (KV + R2 + IPFS) with critical IPFS enforcement
+    console.log(`📦 Persisting block #${block.blockNumber} using unified storage layer...`);
+    
+    const storageResult = await storeChainBlock(this.env, block.blockNumber, block);
+    
+    if (!storageResult.success) {
+      throw new Error(`Failed to persist block ${block.blockNumber}: ${storageResult.error}`);
     }
 
-    // Primary storage in KV for low-latency access
-    await this.env.VERITAS_KV.put(`vdc:block:${block.blockNumber}`, JSON.stringify(block));
+    // Update block with storage metadata
+    block.ipfsHash = storageResult.ipfsHash;
+    block.storage = {
+      r2Key: storageResult.r2Key!,
+      storedAt: storageResult.storedAt,
+      ipfsHash: storageResult.ipfsHash,
+      ipfsGatewayUrl: storageResult.ipfsGatewayUrl,
+      ipfsPinned: true
+    };
 
-    const bucket = this.storageBucket;
-
-    if (bucket) {
-      const r2Key = this.getBlockKey(block.blockNumber);
-      try {
-        const storedAt = Date.now();
-        await bucket.put(r2Key, JSON.stringify(block, null, 2), {
-          httpMetadata: {
-            contentType: 'application/json'
-          },
-          customMetadata: {
-            blockNumber: block.blockNumber.toString(),
-            blockType: options.type,
-            hash: block.hash
-          }
-        });
-
-        block.storage = {
-          r2Key,
-          storedAt,
-          ipfsHash: block.ipfsHash,
-          ipfsGatewayUrl: block.ipfsHash ? this.ipfsClient.getIPFSUrl(block.ipfsHash) : undefined,
-          ipfsPinned: !!ipfsRecord?.isPinned
-        };
-
-        // Persist block again so KV copy includes storage metadata
-        await this.env.VERITAS_KV.put(`vdc:block:${block.blockNumber}`, JSON.stringify(block));
-      } catch (error) {
-        console.warn(`Failed to archive block ${block.blockNumber} to R2`, error);
-      }
-    } else {
-      console.warn('VDC_STORAGE binding not configured; skipping R2 archival for block');
-    }
+    console.log(`✅ Block #${block.blockNumber} persisted successfully`);
+    console.log(`   KV: vdc:block:${block.blockNumber}`);
+    console.log(`   R2: ${storageResult.r2Key}`);
+    console.log(`   IPFS: ${storageResult.ipfsHash}`);
 
     return block;
   }

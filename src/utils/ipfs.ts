@@ -22,14 +22,19 @@ export class IPFSClient {
   async uploadToIPFS(data: string | Uint8Array): Promise<string> {
     try {
       if (!this.pinataApiKey || !this.pinataSecretKey) {
-        throw new Error('Pinata API keys not configured. Please set PINATA_API_KEY and PINATA_SECRET_API_KEY environment variables.');
+        throw new Error('Pinata API keys not configured. Please set PINATA_API_KEY and PINATA_SECRET_KEY environment variables.');
       }
 
       // Convert data to the format Pinata expects
       let content: any;
       if (typeof data === 'string') {
-        // For JSON/text content
-        content = { data };
+        // Try to parse as JSON first; if it fails, treat as plain text
+        try {
+          content = JSON.parse(data);
+        } catch {
+          // Not valid JSON, wrap it
+          content = { data };
+        }
       } else {
         // For binary data, we'd need to use pinFileToIPFS instead
         throw new Error('Binary file uploads not yet implemented. Use pinFileToIPFS for files.');
@@ -46,17 +51,19 @@ export class IPFSClient {
         body: JSON.stringify({
           pinataContent: content,
           pinataMetadata: {
-            name: `veritas-document-${Date.now()}`,
+            name: `veritas-block-${Date.now()}`,
           },
         }),
       });
 
       if (!response.ok) {
         const errorText = await response.text();
+        console.error('Pinata upload failed:', response.status, errorText);
         throw new Error(`Pinata upload failed: ${response.status} ${errorText}`);
       }
 
       const result: { IpfsHash: string } = await response.json();
+      console.log(`✅ IPFS upload successful: ${result.IpfsHash}`);
       return result.IpfsHash; // Return the IPFS hash
     } catch (error) {
       console.error('IPFS upload error:', error);

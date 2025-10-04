@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { Environment, APIResponse } from '../types';
 import { initializeVDC } from '../utils/blockchain';
+import { storeChainBlock } from '../utils/store';
 
 const vdcHandler = new Hono<{ Bindings: Environment }>();
 
@@ -93,6 +94,104 @@ vdcHandler.get('/stats', async (c) => {
 });
 
 vdcHandler.get('/blocks/:blockNumber', async (c) => {
+  const blockParam = c.req.param('blockNumber');
+  const blockNumber = parseInt(blockParam, 10);
+
+  if (Number.isNaN(blockNumber) || blockNumber < 0) {
+    return c.json<APIResponse>({ success: false, error: 'Invalid block number' }, 400);
+  }
+
+  try {
+    const vdc = await initializeVDC(c.env);
+    const block = await vdc.getBlock(blockNumber);
+
+    if (!block) {
+      return c.json<APIResponse>({ success: false, error: 'Block not found' }, 404);
+    }
+
+    return c.json<APIResponse>({ success: true, data: block });
+  } catch (error: any) {
+    console.error('VDC get block error:', error);
+    return c.json<APIResponse>({ success: false, error: error?.message || 'Failed to retrieve block' }, 500);
+  }
+});
+
+// Migrate block from KV to R2 + IPFS
+vdcHandler.post('/migrate-block/:blockNumber', async (c) => {
+  const blockParam = c.req.param('blockNumber');
+  const blockNumber = parseInt(blockParam, 10);
+
+  if (Number.isNaN(blockNumber) || blockNumber < 0) {
+    return c.json<APIResponse>({ success: false, error: 'Invalid block number' }, 400);
+  }
+
+  try {
+    const vdc = await initializeVDC(c.env);
+    const block = await vdc.getBlock(blockNumber);
+
+    if (!block) {
+      return c.json<APIResponse>({ success: false, error: 'Block not found' }, 404);
+    }
+
+    // Check if already migrated
+    if (block.storage?.r2Key && block.ipfsHash) {
+      return c.json<APIResponse>({
+        success: true,
+        data: {
+          blockNumber,
+          alreadyMigrated: true,
+          r2Key: block.storage.r2Key,
+          ipfsHash: block.ipfsHash,
+          ipfsGatewayUrl: block.storage.ipfsGatewayUrl
+        }
+      });
+    }
+
+    // Store using unified storage layer (KV + R2 + IPFS)
+    console.log(`Migrating block #${blockNumber} to R2 + IPFS...`);
+    const storageResult = await storeChainBlock(c.env, blockNumber, block);
+
+    if (!storageResult.success) {
+      throw new Error(storageResult.error || 'Storage failed');
+    }
+
+    // Update block in KV with new storage metadata
+    block.storage = {
+      r2Key: storageResult.r2Key!,
+      storedAt: storageResult.storedAt,
+      ipfsHash: storageResult.ipfsHash,
+      ipfsGatewayUrl: storageResult.ipfsGatewayUrl,
+      ipfsPinned: true
+    };
+    block.ipfsHash = storageResult.ipfsHash;
+
+    await c.env.VERITAS_KV.put(`vdc:block:${blockNumber}`, JSON.stringify(block));
+
+    console.log(`✅ Block #${blockNumber} migrated successfully`);
+    console.log(`   R2: ${storageResult.r2Key}`);
+    console.log(`   IPFS: ${storageResult.ipfsHash || 'pending'}`);
+
+    return c.json<APIResponse>({
+      success: true,
+      data: {
+        blockNumber,
+        r2Key: storageResult.r2Key,
+        ipfsHash: storageResult.ipfsHash,
+        ipfsGatewayUrl: storageResult.ipfsGatewayUrl,
+        storedAt: storageResult.storedAt
+      }
+    });
+  } catch (error: any) {
+    console.error(`VDC migrate block #${blockNumber} error:`, error);
+    return c.json<APIResponse>({ 
+      success: false, 
+      error: error?.message || 'Failed to migrate block' 
+    }, 500);
+  }
+});
+
+// Get block info (alias for /blocks/:blockNumber)
+vdcHandler.get('/block/:blockNumber', async (c) => {
   const blockParam = c.req.param('blockNumber');
   const blockNumber = parseInt(blockParam, 10);
 
@@ -383,6 +482,34 @@ vdcHandler.delete('/transaction/:txId', async (c) => {
     return c.json<APIResponse>({ 
       success: false, 
       error: error?.message || 'Failed to delete transaction' 
+    }, 500);
+  }
+});
+
+// Diagnostic endpoint to check IPFS configuration (admin only)
+vdcHandler.get('/ipfs-config', async (c) => {
+  try {
+    const adminSecret = extractAdminSecret(c.req.header('x-admin-secret'), null);
+    const authError = ensureAdminAccess(c, adminSecret);
+    if (authError) return authError;
+
+    const env = c.env;
+    
+    return c.json<APIResponse>({
+      success: true,
+      data: {
+        pinataApiKeyConfigured: !!env.PINATA_API_KEY,
+        pinataSecretKeyConfigured: !!env.PINATA_SECRET_KEY,
+        ipfsGatewayUrl: env.IPFS_GATEWAY_URL,
+        // Show first 4 chars of API key if configured (for verification)
+        pinataApiKeyPrefix: env.PINATA_API_KEY ? env.PINATA_API_KEY.substring(0, 4) + '...' : 'NOT_SET'
+      }
+    });
+  } catch (error: any) {
+    console.error('IPFS config check error:', error);
+    return c.json<APIResponse>({ 
+      success: false, 
+      error: error?.message || 'Failed to check IPFS config' 
     }, 500);
   }
 });

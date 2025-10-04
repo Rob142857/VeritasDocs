@@ -671,6 +671,259 @@
     const hashArray = new Uint8Array(hashBuffer);
     return Array.from(hashArray).map((b) => b.toString(16).padStart(2, "0")).join("");
   }
+  async function generatePassphrase() {
+    const words = [
+      "abandon",
+      "ability",
+      "able",
+      "about",
+      "above",
+      "absent",
+      "absorb",
+      "abstract",
+      "absurd",
+      "abuse",
+      "access",
+      "accident",
+      "account",
+      "accuse",
+      "achieve",
+      "acid",
+      "acoustic",
+      "acquire",
+      "across",
+      "act",
+      "action",
+      "actor",
+      "actress",
+      "actual",
+      "adapt",
+      "add",
+      "addict",
+      "address",
+      "adjust",
+      "admit",
+      "adult",
+      "advance",
+      "advice",
+      "aerobic",
+      "affair",
+      "afford",
+      "afraid",
+      "again",
+      "age",
+      "agent",
+      "agree",
+      "ahead",
+      "aim",
+      "air",
+      "airport",
+      "aisle",
+      "alarm",
+      "album",
+      "alcohol",
+      "alert",
+      "alien",
+      "all",
+      "alley",
+      "allow",
+      "almost",
+      "alone",
+      "alpha",
+      "already",
+      "also",
+      "alter",
+      "always",
+      "amateur",
+      "amazing",
+      "among",
+      "amount",
+      "amused",
+      "analyst",
+      "anchor",
+      "ancient",
+      "anger",
+      "angle",
+      "angry",
+      "animal",
+      "ankle",
+      "announce",
+      "annual",
+      "another",
+      "answer",
+      "antenna",
+      "antique",
+      "anxiety",
+      "any",
+      "apart",
+      "apology",
+      "appear",
+      "apple",
+      "approve",
+      "april",
+      "arch",
+      "arctic",
+      "area",
+      "arena",
+      "argue",
+      "arm",
+      "armed",
+      "armor",
+      "army",
+      "around",
+      "arrange",
+      "arrest",
+      "arrive",
+      "arrow",
+      "art",
+      "artefact",
+      "artist",
+      "artwork",
+      "ask",
+      "aspect",
+      "assault",
+      "asset",
+      "assist",
+      "assume",
+      "asthma",
+      "athlete",
+      "atom",
+      "attack",
+      "attend",
+      "attitude",
+      "attract",
+      "auction",
+      "audit",
+      "august",
+      "aunt",
+      "author",
+      "auto",
+      "autumn",
+      "average",
+      "avocado",
+      "avoid",
+      "awake",
+      "aware",
+      "away",
+      "awesome",
+      "awful",
+      "awkward",
+      "axis",
+      "baby",
+      "bachelor",
+      "bacon",
+      "badge",
+      "bag",
+      "balance",
+      "balcony",
+      "ball",
+      "bamboo",
+      "banana",
+      "banner",
+      "bar",
+      "barely",
+      "bargain",
+      "barrel",
+      "base"
+    ];
+    const mnemonic = [];
+    const randomBytes = new Uint8Array(16);
+    crypto.getRandomValues(randomBytes);
+    for (let i = 0; i < 12; i++) {
+      const randomIndex = randomBytes[i] % words.length;
+      mnemonic.push(words[randomIndex]);
+    }
+    return mnemonic.join(" ");
+  }
+  async function deriveKeyFromPassphrase(passphrase, salt) {
+    const encoder = new TextEncoder();
+    const passphraseBytes = encoder.encode(passphrase);
+    const baseKey = await crypto.subtle.importKey(
+      "raw",
+      passphraseBytes,
+      "PBKDF2",
+      false,
+      ["deriveKey"]
+    );
+    const aesKey = await crypto.subtle.deriveKey(
+      {
+        name: "PBKDF2",
+        salt,
+        iterations: 1e5,
+        // High iteration count for security
+        hash: "SHA-256"
+      },
+      baseKey,
+      { name: "AES-GCM", length: 256 },
+      false,
+      ["encrypt", "decrypt"]
+    );
+    return aesKey;
+  }
+  async function encryptKeypack(keypack, passphrase) {
+    await ensureCryptoReady();
+    const salt = crypto.getRandomValues(new Uint8Array(16));
+    const aesKey = await deriveKeyFromPassphrase(passphrase, salt);
+    const keypackJson = JSON.stringify(keypack);
+    const plaintext = new TextEncoder().encode(keypackJson);
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const ciphertext = await crypto.subtle.encrypt(
+      {
+        name: "AES-GCM",
+        iv,
+        tagLength: 128
+        // 128-bit auth tag
+      },
+      aesKey,
+      plaintext
+    );
+    return {
+      salt: b64uEncode(salt),
+      iv: b64uEncode(iv),
+      ciphertext: b64uEncode(new Uint8Array(ciphertext))
+    };
+  }
+  async function decryptKeypack(encrypted, passphrase) {
+    await ensureCryptoReady();
+    try {
+      const salt = b64uDecode(encrypted.salt);
+      const iv = b64uDecode(encrypted.iv);
+      const ciphertext = b64uDecode(encrypted.ciphertext);
+      const aesKey = await deriveKeyFromPassphrase(passphrase, salt);
+      const plaintext = await crypto.subtle.decrypt(
+        {
+          name: "AES-GCM",
+          iv,
+          tagLength: 128
+        },
+        aesKey,
+        ciphertext
+      );
+      const keypackJson = new TextDecoder().decode(plaintext);
+      return JSON.parse(keypackJson);
+    } catch (error) {
+      throw new Error("Incorrect passphrase or corrupted keypack file");
+    }
+  }
+  function downloadKeypack(email, encrypted) {
+    const keypackData = {
+      format: "veritas-keypack-v1",
+      created: (/* @__PURE__ */ new Date()).toISOString(),
+      email,
+      encrypted
+    };
+    const blob = new Blob([JSON.stringify(keypackData, null, 2)], {
+      type: "application/octet-stream"
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `veritas-${email.replace("@", "-at-").replace(/[^a-z0-9-]/gi, "")}.keypack`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
   window.VeritasCrypto = {
     encryptDocumentData,
     decryptDocumentData,
@@ -678,7 +931,12 @@
     signData,
     verifySignature,
     ensureCryptoReady,
-    hashData
+    hashData,
+    // New keypack functions
+    generatePassphrase,
+    encryptKeypack,
+    decryptKeypack,
+    downloadKeypack
   };
   console.log("Veritas Crypto module loaded");
 })();

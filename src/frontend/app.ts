@@ -302,7 +302,7 @@ export async function deriveKeyFromPassphrase(
   const aesKey = await crypto.subtle.deriveKey(
     {
       name: 'PBKDF2',
-      salt: salt,
+      salt: salt as BufferSource,
       iterations: 100000, // High iteration count for security
       hash: 'SHA-256'
     },
@@ -339,7 +339,7 @@ export async function encryptKeypack(
   const ciphertext = await crypto.subtle.encrypt(
     {
       name: 'AES-GCM',
-      iv: iv,
+      iv: iv as BufferSource,
       tagLength: 128 // 128-bit auth tag
     },
     aesKey,
@@ -373,11 +373,11 @@ export async function decryptKeypack(
     const plaintext = await crypto.subtle.decrypt(
       {
         name: 'AES-GCM',
-        iv: iv,
+        iv: iv as BufferSource,
         tagLength: 128
       },
       aesKey,
-      ciphertext
+      ciphertext as BufferSource
     );
     
     // Decode and parse keypack

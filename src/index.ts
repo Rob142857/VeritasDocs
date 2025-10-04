@@ -2585,6 +2585,27 @@ app.get('/create-asset', (c) => c.html(appHTML));
 app.get('/search', (c) => c.html(appHTML));
 app.get('/docs', (c) => c.html(appHTML));
 
+// Keypack activation and login pages (new flow)
+app.get('/activate-keypack.html', async (c) => {
+  const env = c.env;
+  const htmlContent = await env.VDC_STORAGE?.get('static/activate-keypack.html');
+  if (!htmlContent) {
+    // Fallback if not in R2 - serve from inline
+    return c.html(`<!DOCTYPE html><html><body><h1>Page not found</h1><p>Please ensure activate-keypack.html is uploaded to R2</p></body></html>`, 404);
+  }
+  return c.html(await htmlContent.text());
+});
+
+app.get('/login-keypack.html', async (c) => {
+  const env = c.env;
+  const htmlContent = await env.VDC_STORAGE?.get('static/login-keypack.html');
+  if (!htmlContent) {
+    // Fallback if not in R2 - serve from inline
+    return c.html(`<!DOCTYPE html><html><body><h1>Page not found</h1><p>Please ensure login-keypack.html is uploaded to R2</p></body></html>`, 404);
+  }
+  return c.html(await htmlContent.text());
+});
+
 // Web3 Demo page - serve static demo file
 app.get('/demo', async (c) => {
   const demoContent = `<!DOCTYPE html>

@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Login - Veritas Documents</title>
+  <link rel="stylesheet" href="/static/styles.css">
+  <style>
+    .file-upload-area {
+      border: 2px dashed #cbd5e1;
+      border-radius: 8px;
+      padding: 2rem;
+      text-align: center;
+      background: #f8fafc;
+      cursor: pointer;
+      transition: all 0.3s;
+    }
+    .file-upload-area:hover {
+      border-color: #3b82f6;
+      background: #eff6ff;
+    }
+    .file-upload-area.dragover {
+      border-color: #3b82f6;
+      background: #dbeafe;
+    }
+    .file-info {
+      margin-top: 1rem;
+      padding: 0.75rem;
+      background: #e0f2fe;
+      border-radius: 6px;
+      font-size: 0.9rem;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="card" style="max-width: 500px; margin: 2rem auto;">
+      <div class="card-header">
+        <h2 class="card-title">Login to Veritas Documents</h2>
+        <p class="card-subtitle">Secure legal document storage with post-quantum cryptography</p>
+      </div>
+
+      <form id="login-form">
+        <div class="form-group">
+          <label class="label" for="email">Email Address</label>
+          <input type="email" id="email" class="input" required placeholder="your@email.com">
+        </div>
+        
+        <div class="form-group">
+          <label class="label" for="passphrase">Recovery Passphrase (12 words)</label>
+          <textarea 
+            id="passphrase" 
+            class="textarea" 
+            placeholder="word1 word2 word3 word4 word5 word6 word7 word8 word9 word10 word11 word12" 
+            rows="2" 
+            required
+          ></textarea>
+          <small style="color: #666;">Enter the 12-word passphrase you saved during activation</small>
+        </div>
+        
+        <div class="form-group">
+          <label class="label">Keypack File (.keypack)</label>
+          <div class="file-upload-area" id="file-drop-area">
+            <div id="file-drop-text">
+              <p style="margin: 0; font-size: 2rem;">📁</p>
+              <p style="margin: 0.5rem 0;"><strong>Click to browse</strong> or drag & drop</p>
+              <p style="margin: 0; font-size: 0.9rem; color: #666;">Your encrypted keypack file</p>
+            </div>
+            <input type="file" id="keypack-file" accept=".keypack" required style="display: none;">
+          </div>
+          <div id="file-info" class="file-info" style="display: none;"></div>
+        </div>
+        
+        <button type="submit" class="btn btn-primary" style="width: 100%;">
+          🔓 Decrypt & Login
+        </button>
+      </form>
+
+      <div class="mt-2 text-center">
+        <p class="text-muted">
+          Don't have an account? 
+          <a href="mailto:admin@veritasdocs.com?subject=Request Account" class="text-primary" style="text-decoration: underline;">
+            Request new account
+          </a>
+        </p>
+      </div>
+
+      <!-- Loading/Error Messages -->
+      <div id="message-box" style="margin-top: 1rem;"></div>
+    </div>
+  </div>
+
+  <script type="module">
+    import * as VeritasCrypto from '/static/app.bundle.js';
+
+    let selectedFile = null;
+
+    function showMessage(type, text) {
+      const box = document.getElementById('message-box');
+      const className = type === 'error' ? 'alert alert-error' : 
+                       type === 'success' ? 'alert alert-success' : 
+                       'alert alert-info';
+      box.innerHTML = `<div class="${className}">${text}</div>`;
+    }
+
+    // File upload handling
+    const dropArea = document.getElementById('file-drop-area');
+    const fileInput = document.getElementById('keypack-file');
+    const fileInfo = document.getElementById('file-info');
+
+    dropArea.addEventListener('click', () => fileInput.click());
+
+    dropArea.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      dropArea.classList.add('dragover');
+    });
+
+    dropArea.addEventListener('dragleave', () => {
+      dropArea.classList.remove('dragover');
+    });
+
+    dropArea.addEventListener('drop', (e) => {
+      e.preventDefault();
+      dropArea.classList.remove('dragover');
+      
+      const files = e.dataTransfer.files;
+      if (files.length > 0) {
+        handleFile(files[0]);
+      }
+    });
+
+    fileInput.addEventListener('change', (e) => {
+      if (e.target.files.length > 0) {
+        handleFile(e.target.files[0]);
+      }
+    });
+
+    function handleFile(file) {
+      if (!file.name.endsWith('.keypack')) {
+        showMessage('error', 'Please select a .keypack file');
+        return;
+      }
+      
+      selectedFile = file;
+      fileInfo.style.display = 'block';
+      fileInfo.innerHTML = `
+        <strong>✅ File selected:</strong> ${file.name}<br>
+        <small>Size: ${(file.size / 1024).toFixed(2)} KB</small>
+      `;
+    }
+
+    // Login form submission
+    document.getElementById('login-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      
+      const email = document.getElementById('email').value.trim();
+      const passphrase = document.getElementById('passphrase').value.trim();
+      
+      if (!selectedFile) {
+        showMessage('error', 'Please select your keypack file');
+        return;
+      }
+
+      try {
+        showMessage('info', 'Loading keypack...');
+        
+        // Step 1: Read keypack file
+        const keypackText = await selectedFile.text();
+        const keypackData = JSON.parse(keypackText);
+        
+        if (keypackData.format !== 'veritas-keypack-v1') {
+          showMessage('error', 'Invalid keypack file format');
+          return;
+        }
+        
+        // Step 2: Initialize PQC
+        showMessage('info', 'Initializing cryptography...');
+        await VeritasCrypto.ensureCryptoReady();
+        
+        // Step 3: Decrypt keypack with passphrase
+        showMessage('info', 'Decrypting keypack...');
+        let keypack;
+        try {
+          keypack = await VeritasCrypto.decryptKeypack(
+            keypackData.encrypted,
+            passphrase
+          );
+        } catch (error) {
+          showMessage('error', 'Incorrect passphrase or corrupted keypack file');
+          return;
+        }
+        
+        // Step 4: Validate email matches
+        if (keypack.email !== email) {
+          showMessage('error', `Email mismatch. This keypack is for: ${keypack.email}`);
+          return;
+        }
+        
+        // Step 5: Sign login challenge with Dilithium private key
+        showMessage('info', 'Signing login challenge...');
+        const timestamp = Date.now();
+        const challenge = `login:${email}:${timestamp}`;
+        const signature = await VeritasCrypto.signData(
+          challenge,
+          keypack.keys.dilithium.private
+        );
+        
+        // Step 6: Send zero-knowledge proof to server
+        showMessage('info', 'Authenticating...');
+        const response = await fetch('/api/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email, signature, timestamp })
+        });
+        
+        const result = await response.json();
+        
+        if (result.success) {
+          showMessage('success', '✅ Login successful! Redirecting...');
+          
+          // Store session data (NOT private keys in localStorage!)
+          sessionStorage.setItem('veritas-keys', JSON.stringify(keypack.keys));
+          localStorage.setItem('veritas-session', JSON.stringify({
+            email: email,
+            userId: result.data.user.id,
+            accountType: result.data.user.accountType,
+            sessionToken: result.data.sessionToken,
+            loginTime: Date.now()
+          }));
+          
+          // Redirect to dashboard
+          setTimeout(() => {
+            window.location.href = '/dashboard';
+          }, 1000);
+        } else {
+          showMessage('error', result.error || 'Login failed. Please check your credentials.');
+        }
+        
+      } catch (error) {
+        console.error('Login error:', error);
+        showMessage('error', 'Login error: ' + error.message);
+      }
+    });
+  </script>
+</body>
+</html>

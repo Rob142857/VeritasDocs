@@ -55,8 +55,8 @@ Upgrade from individual JSON key downloads to a single encrypted `.keypack` file
      }
    }
    ```
-9. **Client-side**: Encrypt keypack with passphrase-derived AES key:
-   - Derive AES-256 key from passphrase using PBKDF2 (100k iterations)
+9. **Client-side**: Encrypt keypack with passphrase-derived AES-GCM key:
+   - Derive AES-GCM-256 key from passphrase using PBKDF2 (100k iterations)
    - Encrypt with AES-256-GCM
    - Generate salt (16 bytes random)
    - Store: `{salt, iv, ciphertext, authTag}`

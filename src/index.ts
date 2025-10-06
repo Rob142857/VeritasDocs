@@ -2142,7 +2142,7 @@ const appHTML = `
     <div id="app">
         <header class="header">
             <div class="container">
-                <h1 class="logo">Veritas Documents</h1>
+                <h1 class="logo"><a href="/" style="color: inherit; text-decoration: none;">Veritas Documents</a></h1>
                 <nav class="nav" id="nav">
                     <!-- Navigation will be populated by JavaScript -->
                 </nav>

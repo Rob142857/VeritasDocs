@@ -1889,63 +1889,61 @@ class VeritasApp {
       if (result.success && result.data.transactions.length > 0) {
         const transactions = result.data.transactions;
         
-        let html = \`
-          <div style="margin-bottom: 1rem;">
-            <strong style="color: #f59e0b;">\${transactions.length} Pending Transaction\${transactions.length !== 1 ? 's' : ''}</strong>
-          </div>
-          <div style="display: flex; flex-direction: column; gap: 1rem;">
-        \`;
+        const parts = [
+          '<div style="margin-bottom: 1rem;">',
+          '  <strong style="color: #f59e0b;">' + transactions.length + ' Pending Transaction' + (transactions.length !== 1 ? 's' : '') + '</strong>',
+          '</div>',
+          '<div style="display: flex; flex-direction: column; gap: 1rem;">'
+        ];
         
         transactions.forEach((tx, index) => {
           const txData = tx.data || {};
-          html += \`
-            <div class="card" style="border-left: 4px solid #f59e0b;">
-              <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 1rem;">
-                <div>
-                  <div style="font-weight: 600; color: #f59e0b;">Transaction #\${index + 1}</div>
-                  <div style="font-size: 0.75rem; color: #6b7280; margin-top: 0.25rem;">\${tx.id}</div>
-                </div>
-                <div style="background: #fef3c7; color: #92400e; padding: 0.25rem 0.75rem; border-radius: 0.375rem; font-size: 0.75rem; font-weight: 600;">
-                  \${tx.type}
-                </div>
-              </div>
-              
-              <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 0.75rem; margin-bottom: 1rem; font-size: 0.875rem;">
-                <div>
-                  <div style="color: #6b7280; font-size: 0.75rem; margin-bottom: 0.25rem;">Asset ID</div>
-                  <div style="font-family: monospace; font-size: 0.75rem;">\${txData.assetId || 'N/A'}</div>
-                </div>
-                <div>
-                  <div style="color: #6b7280; font-size: 0.75rem; margin-bottom: 0.25rem;">Token ID</div>
-                  <div style="font-family: monospace; font-size: 0.75rem;">\${txData.tokenId || 'N/A'}</div>
-                </div>
-                <div>
-                  <div style="color: #6b7280; font-size: 0.75rem; margin-bottom: 0.25rem;">Creator</div>
-                  <div style="font-family: monospace; font-size: 0.75rem;">\${txData.creatorId || 'N/A'}</div>
-                </div>
-                <div>
-                  <div style="color: #6b7280; font-size: 0.75rem; margin-bottom: 0.25rem;">Created</div>
-                  <div>\${new Date(tx.timestamp).toLocaleString()}</div>
-                </div>
-              </div>
-              
-              <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
-                <button onclick="window.app.queryTransaction('\${tx.id}')" class="btn btn-secondary" style="flex: 1; min-width: 120px;">
-                  [SEARCH] Query
-                </button>
-                <button onclick="window.app.mineTransaction('\${tx.id}')" class="btn btn-primary" style="flex: 1; min-width: 160px;">
-                  [APPROVE] Approve (Sign and Mine Block)
-                </button>
-                <button onclick="window.app.deleteTransaction('\${tx.id}')" class="btn" style="flex: 1; min-width: 120px; background: #dc2626; color: white;">
-                  [DELETE] Delete
-                </button>
-              </div>
-            </div>
-          \`;
+          parts.push(
+            '<div class="card" style="border-left: 4px solid #f59e0b;">',
+            '  <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 1rem;">',
+            '    <div>',
+            '      <div style="font-weight: 600; color: #f59e0b;">Transaction #' + (index + 1) + '</div>',
+            '      <div style="font-size: 0.75rem; color: #6b7280; margin-top: 0.25rem;">' + tx.id + '</div>',
+            '    </div>',
+            '    <div style="background: #fef3c7; color: #92400e; padding: 0.25rem 0.75rem; border-radius: 0.375rem; font-size: 0.75rem; font-weight: 600;">',
+            '      ' + tx.type,
+            '    </div>',
+            '  </div>',
+            '  <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 0.75rem; margin-bottom: 1rem; font-size: 0.875rem;">',
+            '    <div>',
+            '      <div style="color: #6b7280; font-size: 0.75rem; margin-bottom: 0.25rem;">Asset ID</div>',
+            '      <div style="font-family: monospace; font-size: 0.75rem;">' + (txData.assetId || 'N/A') + '</div>',
+            '    </div>',
+            '    <div>',
+            '      <div style="color: #6b7280; font-size: 0.75rem; margin-bottom: 0.25rem;">Token ID</div>',
+            '      <div style="font-family: monospace; font-size: 0.75rem;">' + (txData.tokenId || 'N/A') + '</div>',
+            '    </div>',
+            '    <div>',
+            '      <div style="color: #6b7280; font-size: 0.75rem; margin-bottom: 0.25rem;">Creator</div>',
+            '      <div style="font-family: monospace; font-size: 0.75rem;">' + (txData.creatorId || 'N/A') + '</div>',
+            '    </div>',
+            '    <div>',
+            '      <div style="color: #6b7280; font-size: 0.75rem; margin-bottom: 0.25rem;">Created</div>',
+            '      <div>' + new Date(tx.timestamp).toLocaleString() + '</div>',
+            '    </div>',
+            '  </div>',
+            '  <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">',
+            '    <button onclick="window.app.queryTransaction(\\'' + tx.id + '\\')" class="btn btn-secondary" style="flex: 1; min-width: 120px;">',
+            '      [SEARCH] Query',
+            '    </button>',
+            '    <button onclick="window.app.mineTransaction(\\'' + tx.id + '\\')" class="btn btn-primary" style="flex: 1; min-width: 160px;">',
+            '      [APPROVE] Approve (Sign and Mine Block)',
+            '    </button>',
+            '    <button onclick="window.app.deleteTransaction(\\'' + tx.id + '\\')" class="btn" style="flex: 1; min-width: 120px; background: #dc2626; color: white;">',
+            '      [DELETE] Delete',
+            '    </button>',
+            '  </div>',
+            '</div>'
+          );
         });
         
-        html += '</div>';
-        container.innerHTML = html;
+        parts.push('</div>');
+        container.innerHTML = parts.join('');
       } else {
         container.innerHTML = [
           '<div style="text-align: center; padding: 3rem; color: #6b7280;">',
@@ -2164,6 +2162,61 @@ class VeritasApp {
     } catch (error) {
       console.error('View document error:', error);
       this.showAlert('error', 'Error loading document: ' + error.message);
+    }
+  }
+
+  async mineTransaction(txId) {
+    if (!confirm('Are you sure you want to approve and mine this transaction into a block?')) {
+      return;
+    }
+
+    try {
+      const response = await fetch('/api/vdc/mine', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer ' + this.sessionToken
+        }
+      });
+
+      const result = await response.json();
+
+      if (result.success) {
+        this.showAlert('success', 'Block mined successfully!');
+        this.loadPendingTransactions();
+      } else {
+        this.showAlert('error', result.error || 'Failed to mine block');
+      }
+    } catch (error) {
+      console.error('Mine transaction error:', error);
+      this.showAlert('error', 'Error mining block: ' + error.message);
+    }
+  }
+
+  async deleteTransaction(txId) {
+    if (!confirm('Are you sure you want to delete this pending transaction? This action cannot be undone.')) {
+      return;
+    }
+
+    try {
+      const response = await fetch('/api/vdc/pending/' + txId, {
+        method: 'DELETE',
+        headers: {
+          'Authorization': 'Bearer ' + this.sessionToken
+        }
+      });
+
+      const result = await response.json();
+
+      if (result.success) {
+        this.showAlert('success', 'Transaction deleted successfully');
+        this.loadPendingTransactions();
+      } else {
+        this.showAlert('error', result.error || 'Failed to delete transaction');
+      }
+    } catch (error) {
+      console.error('Delete transaction error:', error);
+      this.showAlert('error', 'Error deleting transaction: ' + error.message);
     }
   }
 

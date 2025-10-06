@@ -1,9 +1,54 @@
 import { Hono } from 'hono';
-import { Environment, APIResponse } from '../types';
+import { Environment, APIResponse, User } from '../types';
 import { initializeVDC } from '../utils/blockchain';
 import { storeChainBlock } from '../utils/store';
 
 const vdcHandler = new Hono<{ Bindings: Environment }>();
+
+interface SessionRecord {
+  userId: string;
+  expiresAt: number;
+  createdAt: number;
+}
+
+// Helper function to authenticate user from request headers
+async function authenticateUser(c: any): Promise<User | null> {
+  const env = c.env;
+  const authHeader = c.req.header('Authorization');
+  
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return null;
+  }
+  
+  const token = authHeader.substring(7);
+
+  try {
+    const sessionData = await env.VERITAS_KV.get(`session:${token}`);
+    if (!sessionData) {
+      return null;
+    }
+
+    const session: SessionRecord = JSON.parse(sessionData);
+    if (!session || !session.userId) {
+      return null;
+    }
+
+    if (session.expiresAt < Date.now()) {
+      await env.VERITAS_KV.delete(`session:${token}`);
+      return null;
+    }
+
+    const userData = await env.VERITAS_KV.get(`user:${session.userId}`);
+    if (!userData) {
+      return null;
+    }
+
+    return JSON.parse(userData) as User;
+  } catch (error) {
+    console.error('Authentication error:', error);
+    return null;
+  }
+}
 
 function extractAdminSecret(headerSecret: string | undefined, body: any): string | undefined {
   if (headerSecret && headerSecret.trim().length > 0) {
@@ -279,23 +324,18 @@ vdcHandler.post('/admin/actions', async (c) => {
 });
 
 vdcHandler.post('/mine', async (c) => {
-  let body: any = {};
-
   try {
-    if (c.req.header('content-type')?.includes('application/json')) {
-      body = await c.req.json();
+    // Authenticate user via session token
+    const user = await authenticateUser(c);
+    if (!user) {
+      return c.json<APIResponse>({ success: false, error: 'Authentication required' }, 401);
     }
-  } catch (error) {
-    console.warn('VDC mine: unable to parse body, continuing with header secret only');
-  }
 
-  const adminSecret = extractAdminSecret(c.req.header('x-admin-secret'), body);
-  const authError = ensureAdminAccess(c, adminSecret);
-  if (authError) {
-    return authError;
-  }
+    // Check if user is admin
+    if (user.accountType !== 'admin') {
+      return c.json<APIResponse>({ success: false, error: 'Forbidden: Admin access required' }, 403);
+    }
 
-  try {
     const vdc = await initializeVDC(c.env);
     const block = await vdc.mineBlock();
 

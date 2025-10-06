@@ -322,6 +322,42 @@ body {
   cursor: not-allowed;
 }
 
+.btn-sm {
+  padding: 0.5rem 1rem;
+  font-size: 0.875rem;
+}
+
+/* Badges */
+.badge {
+  display: inline-block;
+  padding: 0.25rem 0.75rem;
+  border-radius: 9999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.badge-success {
+  background-color: #d1fae5;
+  color: var(--success-color);
+}
+
+.badge-warning {
+  background-color: #fef3c7;
+  color: var(--warning-color);
+}
+
+.badge-user {
+  background-color: #dbeafe;
+  color: #1e40af;
+}
+
+.badge-dev {
+  background-color: #fde68a;
+  color: #92400e;
+}
+
 /* Alerts */
 .alert {
   padding: 1rem;
@@ -359,6 +395,33 @@ body {
 
 .grid-3 {
   grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+}
+
+/* Dashboard */
+.dashboard-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 1rem;
+  margin-bottom: 2rem;
+}
+
+.stat-card {
+  background-color: var(--surface);
+  padding: 1.5rem;
+  border-radius: 8px;
+  text-align: center;
+}
+
+.stat-number {
+  font-size: 2rem;
+  font-weight: 600;
+  color: var(--primary-color);
+  margin-bottom: 0.5rem;
+}
+
+.stat-label {
+  color: var(--text-secondary);
+  font-size: 0.875rem;
 }
 
 /* Asset cards */
@@ -408,6 +471,14 @@ body {
   color: var(--text-muted);
   flex-wrap: wrap;
   gap: 0.5rem;
+}
+
+/* Loading states */
+.loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem;
 }
 
 .spinner {
@@ -678,6 +749,7 @@ body {
 .hidden { display: none !important; }
 .text-center { text-align: center; }
 .text-right { text-align: right; }
+.text-muted { color: var(--text-muted) !important; }
 .mb-0 { margin-bottom: 0 !important; }
 .mb-1 { margin-bottom: 0.5rem !important; }
 .mb-2 { margin-bottom: 1rem !important; }
@@ -2101,6 +2173,51 @@ class VeritasApp {
 
   const mailtoLink = 'mailto:admin@veritas-documents.com?subject=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(body);
     window.open(mailtoLink);
+  }
+
+  async loadUserAssets() {
+    try {
+      const response = await fetch('/api/web3-assets/user/' + this.currentUser.id);
+      const result = await response.json();
+      
+      const container = document.getElementById('user-assets');
+      if (result.success && (result.data.pending?.length > 0 || result.data.confirmed?.length > 0)) {
+        const allAssets = [...(result.data.pending || []), ...(result.data.confirmed || [])];
+        
+        container.innerHTML = allAssets.map(asset => '<div class="asset-card"><div class="asset-type">' + (asset.documentType || 'unknown') + '</div><div class="asset-title">' + asset.title + '</div><div class="asset-description">' + (asset.description || '') + '</div><div class="asset-meta"><span>Token: ' + asset.tokenId + '</span><span>' + new Date(asset.createdAt).toLocaleDateString() + '</span><span class="badge ' + (asset.status === 'confirmed' ? 'badge-success' : 'badge-warning') + '">' + (asset.status || asset.paymentStatus) + '</span></div><div class="asset-actions" style="margin-top: 1rem; display: flex; gap: 0.5rem;"><button class="btn btn-secondary btn-sm" onclick="app.decryptAsset(\\'' + asset.id + '\\')">🔓 Decrypt</button><button class="btn btn-secondary btn-sm" onclick="app.downloadAsset(\\'' + asset.id + '\\')">💾 Download</button></div></div>').join('');
+        
+        document.getElementById('owned-count').textContent = result.data.confirmed?.length || 0;
+        document.getElementById('created-count').textContent = allAssets.length;
+      } else {
+        container.innerHTML = '<p class="text-center text-muted">No assets found. Create your first asset to get started!</p>';
+        document.getElementById('owned-count').textContent = '0';
+        document.getElementById('created-count').textContent = '0';
+      }
+    } catch (error) {
+      console.error('Failed to load assets:', error);
+      document.getElementById('user-assets').innerHTML = '<div class="alert alert-error">Failed to load assets</div>';
+    }
+  }
+
+  showAlert(type, message) {
+    const existing = document.querySelector('.alert');
+    if (existing) existing.remove();
+
+    const alert = document.createElement('div');
+    alert.className = 'alert alert-' + type;
+    alert.textContent = message;
+    
+    const content = document.getElementById('content');
+    content.insertBefore(alert, content.firstChild);
+    
+    setTimeout(() => alert.remove(), 5000);
+  }
+
+  showModal(title, bodyHtml) {
+    const modal = document.createElement('div');
+    modal.className = 'modal';
+    modal.innerHTML = '<div class="modal-content"><div class="modal-header"><h3 class="modal-title">' + title + '</h3><button class="modal-close" onclick="this.closest(\\'.modal\\').remove()">&times;</button></div><div class="modal-body">' + bodyHtml + '</div></div>';
+    document.body.appendChild(modal);
   }
 }
 

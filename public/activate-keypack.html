@@ -36,8 +36,19 @@
   </style>
 </head>
 <body>
-  <div class="container">
-    <div class="card" style="max-width: 600px; margin: 2rem auto;">
+  <header class="header">
+    <div class="container">
+      <h1 class="logo"><a href="/" style="color: inherit; text-decoration: none;">Veritas Documents</a></h1>
+      <nav class="nav">
+        <a href="/search">Search</a>
+        <a href="/docs">Docs</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="main">
+    <div class="container">
+      <div class="card" style="max-width: 600px; margin: 2rem auto;">
       <div class="card-header">
         <h2 class="card-title">Activate Your Account</h2>
         <p class="card-subtitle">Complete your account setup with post-quantum security</p>
@@ -108,11 +119,25 @@
 
       <!-- Loading/Error Messages -->
       <div id="message-box" style="margin-top: 1rem;"></div>
+      </div>
     </div>
-  </div>
+  </main>
 
   <script type="module">
-    import * as VeritasCrypto from '/static/app.bundle.js';
+    // Import all functions from the bundle
+    const script = document.createElement('script');
+    script.src = '/static/app.bundle.js';
+    script.type = 'module';
+    await new Promise((resolve, reject) => {
+      script.onload = resolve;
+      script.onerror = reject;
+      document.head.appendChild(script);
+    });
+
+    await new Promise(resolve => setTimeout(resolve, 100));
+
+    // Access the global VeritasCrypto object
+    const VeritasCrypto = window.VeritasCrypto;
 
     // Get token from URL
     const urlParams = new URLSearchParams(window.location.search);

@@ -258,6 +258,56 @@ authHandler.post('/create-link-admin', async (c) => {
   }
 });
 
+// Admin endpoint to create a normal user invite (inviteType: 'user')
+authHandler.post('/create-link-user-admin', async (c) => {
+  try {
+    const env = c.env;
+    const { email, adminKey } = await c.req.json();
+
+    console.log(`🔐 Admin create user-invite called for email: ${email}`);
+
+    if (!adminKey || adminKey !== env.ADMIN_SECRET_KEY) {
+      console.log('❌ Unauthorized: Invalid admin key');
+      return c.json<APIResponse>({ success: false, error: 'Unauthorized' }, 401);
+    }
+
+    if (!email) {
+      return c.json<APIResponse>({ success: false, error: 'Email is required' }, 400);
+    }
+
+    const linkId = generateId();
+    const token = crypto.randomUUID();
+    const expiresAt = Date.now() + (7 * 24 * 60 * 60 * 1000); // 7 days
+
+    const oneTimeLink: OneTimeLink = {
+      id: linkId,
+      token,
+      createdBy: 'admin',
+      inviteType: 'user',
+      email,
+      expiresAt,
+      used: false,
+    };
+
+    await storeActivationLink(env, oneTimeLink);
+
+    const activationUrl = `${c.req.url.split('/api')[0]}/activate?token=${token}`;
+
+    console.log(`✅ User invite link created successfully`);
+    return c.json<APIResponse>({
+      success: true,
+      data: { activationUrl, expiresAt, token },
+      message: 'User invitation link created successfully',
+    });
+  } catch (error) {
+    console.error('❌ Error in create-link-user-admin:', error);
+    return c.json<APIResponse>({ 
+      success: false, 
+      error: error instanceof Error ? error.message : 'Internal server error' 
+    }, 500);
+  }
+});
+
 // Send invitation to create account (user endpoint)
 authHandler.post('/send-invite', async (c) => {
   try {
@@ -284,7 +334,7 @@ authHandler.post('/send-invite', async (c) => {
 
     const linkId = generateId();
     const token = crypto.randomUUID();
-    const expiresAt = Date.now() + (7 * 24 * 60 * 60 * 1000); // 7 days
+  const expiresAt = Date.now() + (6 * 24 * 60 * 60 * 1000); // 6 days
 
     const oneTimeLink: OneTimeLink = {
       id: linkId,
@@ -307,6 +357,54 @@ authHandler.post('/send-invite', async (c) => {
     });
   } catch (error) {
     console.error('Error sending invitation:', error);
+    return c.json<APIResponse>({ success: false, error: 'Internal server error' }, 500);
+  }
+});
+
+// Admin (session-auth) endpoint to create invite of type 'admin' or 'user'
+authHandler.post('/admin/create-invite', async (c) => {
+  try {
+    const env = c.env;
+    const { email, inviteType } = await c.req.json();
+
+    if (!email) {
+      return c.json<APIResponse>({ success: false, error: 'Email is required' }, 400);
+    }
+
+    const sender = await authenticateUser(c);
+    if (!sender) {
+      return c.json<APIResponse>({ success: false, error: 'Authentication required' }, 401);
+    }
+    if (sender.accountType !== 'admin') {
+      return c.json<APIResponse>({ success: false, error: 'Forbidden: Admins only' }, 403);
+    }
+
+    const linkId = generateId();
+    const token = crypto.randomUUID();
+    const expiresAt = Date.now() + (6 * 24 * 60 * 60 * 1000); // 6 days
+    const type: 'admin' | 'user' = inviteType === 'admin' ? 'admin' : 'user';
+
+    const oneTimeLink: OneTimeLink = {
+      id: linkId,
+      token,
+      createdBy: sender.id,
+      inviteType: type,
+      email,
+      expiresAt,
+      used: false,
+    };
+
+    await storeActivationLink(env, oneTimeLink);
+
+    const activationUrl = `${c.req.url.split('/api')[0]}/activate?token=${token}`;
+
+    return c.json<APIResponse>({
+      success: true,
+      data: { activationUrl, expiresAt, token, inviteType: type },
+      message: 'Invitation created successfully',
+    });
+  } catch (error) {
+    console.error('Error creating admin invite:', error);
     return c.json<APIResponse>({ success: false, error: 'Internal server error' }, 500);
   }
 });

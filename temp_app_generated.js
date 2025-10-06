@@ -1,813 +1,4 @@
-import { Hono } from 'hono';
-import { cors } from 'hono/cors';
-
-import { Environment } from './types';
-import { authHandler } from './handlers/auth';
-import { assetHandler } from './handlers/assets';
-import { enhancedAssetHandler } from './handlers/web3-assets';
-import { userHandler } from './handlers/users';
-import { stripeHandler } from './handlers/stripe';
-import { searchHandler } from './handlers/search';
-import vdcHandler from './handlers/vdc';
-import storageVerifyHandler from './handlers/storage-verify';
-import { MaataraClient } from './utils/crypto';
-
-type Bindings = Environment;
-
-const app = new Hono<{ Bindings: Bindings }>();
-
-// CORS middleware
-app.use('*', cors({
-  origin: ['https://veritas-documents.workers.dev', 'http://localhost:8787'],
-  allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowHeaders: ['Content-Type', 'Authorization', 'stripe-signature'],
-}));
-
-// Special handling for Stripe webhook - MUST come before any body parsing middleware
-// This intercepts the request and handles it directly to preserve the raw body
-app.post('/api/stripe/webhook', async (c) => {
-  try {
-    const env = c.env;
-    const req = c.req.raw;
-    const signature = req.headers.get('stripe-signature');
-    
-    if (!signature) {
-      console.error('Missing Stripe signature header');
-      return c.json({ success: false, error: 'Missing signature' }, 400);
-    }
-
-    // Clone the request to read the body without consuming it
-    const clonedReq = req.clone();
-    const body = await clonedReq.text();
-
-    console.log('Webhook received - signature:', signature.substring(0, 20) + '...');
-    console.log('Body length:', body.length);
-    console.log('Secret exists:', !!env.STRIPE_WEBHOOK_SECRET);
-    console.log('Secret prefix:', env.STRIPE_WEBHOOK_SECRET?.substring(0, 10));
-
-    const Stripe = (await import('stripe')).default;
-    const stripe = new Stripe(env.STRIPE_SECRET_KEY, {
-      apiVersion: '2023-10-16',
-    });
-
-    let event;
-    try {
-      // Use async version for Cloudflare Workers
-      event = await stripe.webhooks.constructEventAsync(body, signature, env.STRIPE_WEBHOOK_SECRET);
-      console.log('✅ Webhook signature verified successfully, event type:', event.type);
-    } catch (err: any) {
-      console.error('❌ Webhook signature verification failed:', err.message);
-      console.error('Error details:', JSON.stringify(err, null, 2));
-      return c.json({ success: false, error: 'Invalid signature' }, 400);
-    }
-
-    // Handle checkout.session.completed event
-    if (event.type === 'checkout.session.completed') {
-      const session = event.data.object as any;
-      
-      console.log('Checkout session completed:', session.id);
-      
-      const assetId = session.metadata?.assetId;
-      const userId = session.metadata?.userId;
-      
-      if (!assetId || !userId) {
-        console.error('Missing assetId or userId in session metadata');
-        return c.json({ success: false, error: 'Invalid session metadata' }, 400);
-      }
-
-      // Get asset from KV
-      const assetData = await env.VERITAS_KV.get(`asset:${assetId}`);
-      if (!assetData) {
-        console.error('Asset not found:', assetId);
-        return c.json({ success: false, error: 'Asset not found' }, 404);
-      }
-
-      const asset = JSON.parse(assetData);
-      
-      // Update asset payment status
-      asset.paymentStatus = 'completed';
-      asset.paidAt = Date.now();
-      await env.VERITAS_KV.put(`asset:${assetId}`, JSON.stringify(asset));
-
-      // Move asset from pending to owned
-      const userPendingAssetsKey = `user_pending_assets:${userId}`;
-      const userAssetsKey = `user_assets:${userId}`;
-      
-      const pendingAssets = await env.VERITAS_KV.get(userPendingAssetsKey);
-      if (pendingAssets) {
-        const pendingList = JSON.parse(pendingAssets);
-        const updatedPending = pendingList.filter((id: string) => id !== assetId);
-        await env.VERITAS_KV.put(userPendingAssetsKey, JSON.stringify(updatedPending));
-      }
-      
-      const ownedAssets = await env.VERITAS_KV.get(userAssetsKey);
-      const ownedList = ownedAssets ? JSON.parse(ownedAssets) : [];
-      ownedList.push(assetId);
-      await env.VERITAS_KV.put(userAssetsKey, JSON.stringify(ownedList));
-
-      // Create VDC transaction for asset registration
-      console.log('Creating VDC transaction for asset:', assetId);
-      
-      console.log('Payment completed for asset:', assetId);
-    }
-
-    return c.json({ success: true });
-  } catch (error: any) {
-    console.error('Webhook error:', error);
-    return c.json({ success: false, error: error.message }, 500);
-  }
-});
-
-// Serve static files from /public for fallback HTML pages
-app.get('/public/*', async (c) => {
-  try {
-    const path = c.req.path.replace('/public/', '');
-    // Only allow specific html files to avoid directory traversal
-    if (path === 'activate-keypack.html') {
-      // Inline small proxy to the checked-in file content
-      const html = `<!DOCTYPE html><html><head><meta http-equiv="refresh" content="0; url=/activate-keypack.html${c.req.url.includes('?') ? '?' + c.req.url.split('?')[1] : ''}"><title>Redirecting…</title></head><body>Redirecting…</body></html>`;
-      return c.html(html);
-    }
-    return c.text('Not found', 404);
-  } catch (e) {
-    console.error('Error serving public file:', e);
-    return c.text('Error serving file', 500);
-  }
-});
-
-// CSS endpoint - keeping this minimal to avoid bundle bloat
-app.get('/styles.css', async (c) => {
-  const css = `:root {
-  --primary-color: #2563eb;
-  --primary-hover: #1d4ed8;
-  --success-color: #10b981;
-  --error-color: #dc2626;
-  --warning-color: #d97706;
-  --background: #ffffff;
-  --surface: #f8fafc;
-  --border: #e2e8f0;
-  --text-primary: #0f172a;
-  --text-secondary: #64748b;
-  --text-muted: #94a3b8;
-}
-
-* {
-  margin: 0;
-  padding: 0;
-  box-sizing: border-box;
-}
-
-body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', sans-serif;
-  background-color: var(--background);
-  color: var(--text-primary);
-  line-height: 1.6;
-}
-
-.container {
-  max-width: 1200px;
-  margin: 0 auto;
-  padding: 0 1rem;
-}
-
-/* Header */
-.header {
-  background-color: var(--background);
-  border-bottom: 1px solid var(--border);
-  padding: 1rem 0;
-}
-
-.header .container {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-
-.logo {
-  font-size: 1.5rem;
-  font-weight: 600;
-  color: var(--primary-color);
-}
-
-.nav {
-  display: flex;
-  gap: 2rem;
-}
-
-.nav a {
-  color: var(--text-secondary);
-  text-decoration: none;
-  font-weight: 500;
-  transition: color 0.2s;
-}
-
-.nav a:hover,
-.nav a.active {
-  color: var(--primary-color);
-}
-
-/* Main content */
-.main {
-  min-height: calc(100vh - 80px);
-  padding: 2rem 0;
-}
-
-/* Cards */
-.card {
-  background-color: var(--background);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 1.5rem;
-  margin-bottom: 1.5rem;
-}
-
-.card-header {
-  margin-bottom: 1rem;
-}
-
-.card-title {
-  font-size: 1.25rem;
-  font-weight: 600;
-  margin-bottom: 0.5rem;
-}
-
-.card-subtitle {
-  color: var(--text-secondary);
-  font-size: 0.875rem;
-}
-
-/* Forms */
-.form-group {
-  margin-bottom: 1rem;
-}
-
-.label {
-  display: block;
-  margin-bottom: 0.5rem;
-  font-weight: 500;
-  color: var(--text-primary);
-}
-
-.input,
-.textarea,
-.select {
-  width: 100%;
-  padding: 0.75rem;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  font-size: 1rem;
-  transition: border-color 0.2s, box-shadow 0.2s;
-}
-
-.input:focus,
-.textarea:focus,
-.select:focus {
-  outline: none;
-  border-color: var(--primary-color);
-  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
-}
-
-.textarea {
-  resize: vertical;
-  min-height: 100px;
-}
-
-/* Buttons */
-.btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0.75rem 1.5rem;
-  border: none;
-  border-radius: 6px;
-  font-size: 1rem;
-  font-weight: 500;
-  text-decoration: none;
-  cursor: pointer;
-  transition: all 0.2s;
-  gap: 0.5rem;
-}
-
-.btn-primary {
-  background-color: var(--primary-color);
-  color: white;
-}
-
-.btn-primary:hover {
-  background-color: var(--primary-hover);
-}
-
-.btn-secondary {
-  background-color: var(--surface);
-  color: var(--text-primary);
-  border: 1px solid var(--border);
-}
-
-.btn-secondary:hover {
-  background-color: var(--border);
-}
-
-.btn-success {
-  background-color: var(--success-color);
-  color: white;
-}
-
-.btn-danger {
-  background-color: var(--error-color);
-  color: white;
-}
-
-.btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-/* Alerts */
-.alert {
-  padding: 1rem;
-  border-radius: 6px;
-  margin-bottom: 1rem;
-}
-
-.alert-success {
-  background-color: #f0fdf4;
-  color: var(--success-color);
-  border: 1px solid #bbf7d0;
-}
-
-.alert-error {
-  background-color: #fef2f2;
-  color: var(--error-color);
-  border: 1px solid #fecaca;
-}
-
-.alert-warning {
-  background-color: #fffbeb;
-  color: var(--warning-color);
-  border: 1px solid #fed7aa;
-}
-
-/* Grid */
-.grid {
-  display: grid;
-  gap: 1.5rem;
-}
-
-.grid-2 {
-  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-}
-
-.grid-3 {
-  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-}
-
-/* Asset cards */
-.asset-card {
-  background-color: var(--background);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 0.875rem;
-  margin-bottom: 0.75rem;
-  transition: all 0.2s ease;
-}
-
-.asset-card:hover {
-  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15);
-  transform: translateY(-2px);
-  border-color: var(--primary-color);
-}
-
-.asset-type {
-  display: inline-block;
-  padding: 0.2rem 0.5rem;
-  background-color: var(--surface);
-  border-radius: 3px;
-  font-size: 0.7rem;
-  font-weight: 500;
-  text-transform: uppercase;
-  margin-bottom: 0.4rem;
-}
-
-.asset-title {
-  font-size: 0.95rem;
-  font-weight: 600;
-  margin-bottom: 0.3rem;
-}
-
-.asset-description {
-  color: var(--text-secondary);
-  margin-bottom: 0.6rem;
-  font-size: 0.85rem;
-}
-
-.asset-meta {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  font-size: 0.75rem;
-  color: var(--text-muted);
-  flex-wrap: wrap;
-  gap: 0.5rem;
-}
-
-.spinner {
-  width: 32px;
-  height: 32px;
-  border: 3px solid var(--border);
-  border-top: 3px solid var(--primary-color);
-  border-radius: 50%;
-  animation: spin 1s linear infinite;
-}
-
-@keyframes spin {
-  0% { transform: rotate(0deg); }
-  100% { transform: rotate(360deg); }
-}
-
-/* Responsive */
-@media (max-width: 768px) {
-  .header .container {
-    flex-direction: column;
-    gap: 1rem;
-  }
-  
-  .nav {
-    flex-wrap: wrap;
-    justify-content: center;
-  }
-  
-  .container {
-    padding: 0 0.5rem;
-  }
-  
-  .card {
-    padding: 1rem;
-  }
-}
-
-/* Modal */
-.modal {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background-color: rgba(0, 0, 0, 0.5);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 1000;
-  padding: 1rem;
-}
-
-.modal-content {
-  background-color: var(--background);
-  border-radius: 12px;
-  max-width: 600px;
-  width: 100%;
-  max-height: 90vh;
-  overflow-y: auto;
-  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1);
-}
-
-.modal-header {
-  padding: 1.5rem;
-  border-bottom: 1px solid var(--border);
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-
-.modal-title {
-  font-size: 1.25rem;
-  font-weight: 600;
-}
-
-.modal-close {
-  background: none;
-  border: none;
-  font-size: 1.5rem;
-  color: var(--text-muted);
-  cursor: pointer;
-  padding: 0;
-  width: 32px;
-  height: 32px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.modal-close:hover {
-  color: var(--text-primary);
-}
-
-.modal-body {
-  padding: 1.5rem;
-}
-
-.modal-footer {
-  padding: 1.5rem;
-  border-top: 1px solid var(--border);
-  display: flex;
-  gap: 1rem;
-  justify-content: flex-end;
-}
-
-.checkbox-group {
-  display: flex;
-  align-items: flex-start;
-  gap: 0.75rem;
-  padding: 0.75rem;
-  background-color: var(--surface);
-  border-radius: 6px;
-  margin-bottom: 0.75rem;
-}
-
-.checkbox-group input[type="checkbox"] {
-  margin-top: 0.25rem;
-  cursor: pointer;
-}
-
-.checkbox-group label {
-  cursor: pointer;
-  font-size: 0.875rem;
-  line-height: 1.5;
-}
-
-/* Progress modal */
-.progress-modal {
-  position: fixed;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  background-color: rgba(0, 0, 0, 0.7);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 10000;
-}
-
-.progress-modal-content {
-  background-color: var(--background);
-  border-radius: 12px;
-  padding: 2rem;
-  text-align: center;
-  min-width: 300px;
-  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.3);
-}
-
-.progress-spinner {
-  width: 50px;
-  height: 50px;
-  border: 4px solid var(--border);
-  border-top-color: var(--primary-color);
-  border-radius: 50%;
-  animation: spin 1s linear infinite;
-  margin: 0 auto 1rem;
-}
-
-@keyframes spin {
-  to { transform: rotate(360deg); }
-}
-
-.progress-modal-title {
-  font-size: 1.125rem;
-  font-weight: 600;
-  margin-bottom: 0.5rem;
-  color: var(--text-primary);
-}
-
-.progress-modal-message {
-  font-size: 0.875rem;
-  color: var(--text-secondary);
-}
-
-/* Modal styles */
-.modal {
-  position: fixed;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  background-color: rgba(0, 0, 0, 0.7);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 9999;
-  animation: fadeIn 0.2s ease-in-out;
-}
-
-@keyframes fadeIn {
-  from { opacity: 0; }
-  to { opacity: 1; }
-}
-
-.modal-content {
-  background-color: var(--background);
-  border-radius: 12px;
-  max-width: 90%;
-  max-height: 90vh;
-  overflow: hidden;
-  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
-  animation: slideDown 0.3s ease-out;
-}
-
-@keyframes slideDown {
-  from {
-    transform: translateY(-50px);
-    opacity: 0;
-  }
-  to {
-    transform: translateY(0);
-    opacity: 1;
-  }
-}
-
-.modal-header {
-  padding: 1.5rem;
-  border-bottom: 1px solid var(--border);
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-
-.modal-title {
-  margin: 0;
-  font-size: 1.25rem;
-  font-weight: 600;
-  color: var(--text-primary);
-}
-
-.modal-close {
-  background: none;
-  border: none;
-  font-size: 1.5rem;
-  color: var(--text-secondary);
-  cursor: pointer;
-  padding: 0;
-  width: 32px;
-  height: 32px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 4px;
-  transition: all 0.2s;
-}
-
-.modal-close:hover {
-  background-color: var(--surface);
-  color: var(--text-primary);
-}
-
-.modal-body {
-  padding: 1.5rem;
-  max-height: calc(90vh - 160px);
-  overflow-y: auto;
-}
-
-.modal-footer {
-  padding: 1rem 1.5rem;
-  border-top: 1px solid var(--border);
-  display: flex;
-  justify-content: flex-end;
-  gap: 0.5rem;
-}
-
-/* Utility classes */
-.hidden { display: none !important; }
-.text-center { text-align: center; }
-.text-right { text-align: right; }
-.mb-0 { margin-bottom: 0 !important; }
-.mb-1 { margin-bottom: 0.5rem !important; }
-.mb-2 { margin-bottom: 1rem !important; }
-.mt-2 { margin-top: 1rem !important; }
-.p-4 { padding: 2rem !important; }`;
-
-  return c.text(css, 200, {
-    'Content-Type': 'text/css; charset=utf-8',
-    'Cache-Control': 'public, max-age=3600'
-  });
-});
-
-// Also serve at /static/styles.css for compatibility
-app.get('/static/styles.css', async (c) => {
-  return c.redirect('/styles.css');
-});
-
-// Serve static files from /public for fallback HTML pages
-app.get('/public/*', async (c) => {
-  try {
-    const path = c.req.path.replace('/public/', '');
-    // Only allow specific html files to avoid directory traversal
-    if (path === 'activate-keypack.html') {
-      // Inline small proxy to the checked-in file content
-      const html = `<!DOCTYPE html><html><head><meta http-equiv="refresh" content="0; url=/activate-keypack.html${c.req.url.includes('?') ? '?' + c.req.url.split('?')[1] : ''}"><title>Redirecting…</title></head><body>Redirecting…</body></html>`;
-      return c.html(html);
-    }
-    if (path === 'login-keypack.html') {
-      const html = '<!DOCTYPE html><html><head><meta http-equiv="refresh" content="0; url=/login-keypack.html"><title>Redirecting…</title></head><body>Redirecting…</body></html>';
-      return c.html(html);
-    }
-  } catch {}
-  return c.text('Not found', 404);
-});
-
-// Serve bundled frontend application from KV or inline
-app.get('/static/app.bundle.js', async (c) => {
-  try {
-    // Try to load from KV first (production-ready Maatara PQC bundle)
-    const env = c.env as Environment;
-    let bundle = await env.VERITAS_KV.get('app-bundle');
-    
-    if (bundle) {
-      console.log('✅ Serving real Maatara PQC bundle from KV (size:', bundle.length, 'bytes)');
-      return c.text(bundle, 200, { 
-        'Content-Type': 'application/javascript',
-        'Cache-Control': 'no-cache, no-store, must-revalidate',
-        'ETag': `"app-bundle-v10-${Date.now()}"`,
-      });
-    } else {
-      console.warn('⚠️ app-bundle not found in KV, falling back to error bundle');
-    }
-  } catch (error) {
-    console.error('❌ Failed to load bundle from KV:', error);
-  }
-
-  // Fallback: serve simple bundle with hashData function
-  const simpleBundle = `// Veritas Crypto Bundle with hashData function
-(async () => {
-  const encoder = new TextEncoder();
-  const decoder = new TextDecoder();
-
-  async function hashData(data) {
-    const encoder = new TextEncoder();
-    const dataBuffer = encoder.encode(data);
-    const hashBuffer = await crypto.subtle.digest('SHA-256', dataBuffer);
-    const hashArray = new Uint8Array(hashBuffer);
-    return Array.from(hashArray)
-      .map(b => b.toString(16).padStart(2, '0'))
-      .join('');
-  }
-
-  // Merge hashData into existing VeritasCrypto object instead of replacing it
-  if (window.VeritasCrypto) {
-    window.VeritasCrypto.hashData = hashData;
-    console.log("✅ Added hashData function to existing VeritasCrypto module");
-  } else {
-    // ERROR: Real crypto bundle didn't load!
-    console.error("❌ CRITICAL: Post-quantum crypto bundle failed to load!");
-    console.error("The app.bundle.js file must load before this script.");
-    window.VeritasCrypto = {
-      encryptDocumentData: async function() {
-        throw new Error("PQC bundle not loaded - cannot encrypt data");
-      },
-      decryptDocumentData: async function() {
-        throw new Error("PQC bundle not loaded - cannot decrypt data");
-      },
-      generateClientKeypair: async function() {
-        throw new Error("PQC bundle not loaded - cannot generate keypair. Check browser console for errors.");
-      },
-      signData: async function() {
-        throw new Error("PQC bundle not loaded - cannot sign data");
-      },
-      verifySignature: async function() {
-        throw new Error("PQC bundle not loaded - cannot verify signature");
-      },
-      ensureCryptoReady: async function() {
-        throw new Error("PQC bundle failed to load - cannot initialize cryptography");
-      },
-      hashData: hashData
-    };
-    // Show user-friendly error in UI
-    const alertDiv = document.createElement('div');
-    alertDiv.style.cssText = 'position:fixed;top:20px;left:50%;transform:translateX(-50%);background:#dc2626;color:white;padding:20px;border-radius:8px;z-index:9999;max-width:600px;';
-    alertDiv.innerHTML = '<strong>⚠️ Cryptography Module Failed to Load</strong><br>Please refresh the page. If this persists, clear your browser cache.';
-    document.body.appendChild(alertDiv);
-  }
-})();
-`;
-
-  return c.text(simpleBundle, 200, { 'Content-Type': 'application/javascript' });
-});
-
-// Serve WASM file
-app.get('/static/core_pqc_wasm_bg.wasm', async (c) => {
-  try {
-    const env = c.env as Environment;
-    const wasm = await env.VERITAS_KV.get('pqc-wasm', 'arrayBuffer');
-    if (wasm) {
-      return c.body(wasm, 200, { 'Content-Type': 'application/wasm' });
-    }
-  } catch (error) {
-    console.error('Failed to load WASM from KV:', error);
-  }
-  
-  return c.text('WASM file not found', 404);
-});
-
-app.get('/static/app.js', async (c) => {
-  const js = `
+`
 // Veritas Documents - Frontend Application
 
 // Load the bundled Post-Quantum Cryptography module
@@ -1171,7 +362,7 @@ class VeritasApp {
     const handleFile = (file) => {
       if (!file.name.endsWith('.keypack')) { showKpMessage('error', 'Please select a .keypack file'); return; }
       selectedFile = file; info.style.display = 'block';
-      info.innerHTML = '<strong>[OK] File selected:</strong> ' + file.name + '<br><small>Size: ' + (file.size/1024).toFixed(2) + ' KB</small>';
+      info.innerHTML = '<strong>✅ File selected:</strong> ' + file.name + '<br><small>Size: ' + (file.size/1024).toFixed(2) + ' KB</small>';
     };
 
     document.getElementById('keypack-login-form').addEventListener('submit', async (e) => {
@@ -1205,7 +396,7 @@ class VeritasApp {
         const resp = await fetch('/api/auth/login', { method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify({ email, signature, timestamp }) });
         const result = await resp.json();
         if (!result.success) { showKpMessage('error', result.error || 'Login failed. Please check your credentials.'); return; }
-        showKpMessage('success', '[OK] Login successful! Redirecting...');
+        showKpMessage('success', '✅ Login successful! Redirecting...');
         // Hydrate SPA session
         this.currentUser = result.data.user;
         localStorage.setItem('veritas-user', JSON.stringify(this.currentUser));
@@ -1454,7 +645,7 @@ class VeritasApp {
         '    position: static;',
         '  }',
         '}'
-  ].join('\\n');
+      ].join('\n');
       document.head.appendChild(style);
     }
 
@@ -1577,9 +768,10 @@ class VeritasApp {
       '  </form>',
       '  <div id="activation-msg" class="mt-2"></div>',
       '  <div id="passphrase-section" style="display:none;" class="mt-2">',
-      '    <div class="alert alert-success">Account Activated!</div>',
+      '    <div class="alert alert-success">✅ Account Activated!</div>',
       '    <div class="alert alert-warning">',
-      '      <strong>WARNING: Save Your Recovery Passphrase</strong><br/>Write down these 12 words in order. You will need them to access your account.',
+      '      <strong>⚠️ Save Your Recovery Passphrase</strong><br/>Write down these 12 words in order. You will need them to access your account.
+',
       '    </div>',
       '    <div id="passphrase-words" style="font-family:monospace;font-size:1.1rem;padding:1rem;background:#f5f5f5;border:2px solid #fbbf24;border-radius:6px;text-align:center;"></div>',
       '    <div class="form-group" style="margin-top:1rem;">',
@@ -1588,7 +780,7 @@ class VeritasApp {
       '        <span><strong>I have written down my passphrase in a safe place</strong></span>',
       '      </label>',
       '    </div>',
-      '    <button id="download-keypack-btn" class="btn btn-primary" disabled style="width:100%;">[LOCK] Download Keypack File</button>',
+      '    <button id="download-keypack-btn" class="btn btn-primary" disabled style="width:100%;">🔐 Download Keypack File</button>',
       '  </div>',
       '</div>'
     ].join('');
@@ -1655,7 +847,7 @@ class VeritasApp {
             };
             const encrypted = await window.VeritasCrypto.encryptKeypack(keypack, passphrase);
             window.VeritasCrypto.downloadKeypack(userEmail, encrypted);
-            showActMsg('success', '[SUCCESS] Keypack downloaded! You can now login below.');
+            showActMsg('success', '🎉 Keypack downloaded! You can now login below.');
           } catch (err) {
             console.error('Keypack download error:', err);
             showActMsg('error', 'Failed to create keypack: ' + (err && err.message ? err.message : String(err)));
@@ -1732,7 +924,7 @@ class VeritasApp {
     content.innerHTML = [
       '<div class="card">',
       '  <div class="card-header">',
-      '    <h2 class="card-title" style="color: #f59e0b;">[ADMIN] Admin Panel</h2>',
+      '    <h2 class="card-title" style="color: #f59e0b;">⚙️ Admin Panel</h2>',
       '    <p class="card-subtitle">Manage blockchain transactions and system operations</p>',
       '  </div>',
       '  <section class="card" style="margin: 1rem 0;">',
@@ -1859,13 +1051,13 @@ class VeritasApp {
               
               <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
                 <button onclick="window.app.queryTransaction('\${tx.id}')" class="btn btn-secondary" style="flex: 1; min-width: 120px;">
-                  [SEARCH] Query
+                  🔍 Query
                 </button>
                 <button onclick="window.app.mineTransaction('\${tx.id}')" class="btn btn-primary" style="flex: 1; min-width: 160px;">
-                  [APPROVE] Approve (Sign and Mine Block)
+                  ✅ Approve (Sign and Mine Block)
                 </button>
                 <button onclick="window.app.deleteTransaction('\${tx.id}')" class="btn" style="flex: 1; min-width: 120px; background: #dc2626; color: white;">
-                  [DELETE] Delete
+                  🗑️ Delete
                 </button>
               </div>
             </div>
@@ -1877,7 +1069,7 @@ class VeritasApp {
       } else {
         container.innerHTML = [
           '<div style="text-align: center; padding: 3rem; color: #6b7280;">',
-          '  <div style="font-size: 3rem; margin-bottom: 1rem;">[CHECK]</div>',
+          '  <div style="font-size: 3rem; margin-bottom: 1rem;">✅</div>',
           '  <p style="font-size: 1.125rem; font-weight: 600; margin-bottom: 0.5rem;">No Pending Transactions</p>',
           '  <p style="font-size: 0.875rem;">All transactions have been mined to the blockchain.</p>',
           '</div>'
@@ -1893,8 +1085,8 @@ class VeritasApp {
   sendInviteEmail(email, activationUrl, personalMessage) {
     try {
       const subject = 'Invitation to Veritas Documents';
-      const body = [
-        personalMessage || '',
+      const lines = [
+        (personalMessage || ''),
         '',
         'You have been invited to create an account at Veritas Documents.',
         'Please click the link below and activate your account within 6 days:',
@@ -1902,7 +1094,8 @@ class VeritasApp {
         activationUrl,
         '',
         'If you have any questions, just reply to this email.'
-      ].join(String.fromCharCode(10));
+      ];
+      const body = lines.join('\n');
       // Use cc as a reliable fallback for Reply-To semantics across clients
       const cc = 'service.desk@rmesolutions.com.au';
       const mailto = 'mailto:' + encodeURIComponent(email) +
@@ -1925,11 +1118,11 @@ class VeritasApp {
       '    <h3 class="modal-title">Invite a Friend</h3>',
       '    <button class="modal-close" aria-label="Close">×</button>',
       '  </div>',
-  '    <div class="modal-body">',
-  '      <div class="form-group">',
-  '        <label class="form-label" for="invite-email">Friend&apos;s Email</label>',
-  '        <input type="email" id="invite-email" class="input" placeholder="friend@example.com" />',
-  '      </div>',
+      '  <div class="modal-body">',
+      '    <div class="form-group">',
+      '      <label class="label" for="invite-email">Friend\'s Email</label>',
+      '      <input type="email" id="invite-email" class="input" placeholder="friend@example.com" />',
+      '    </div>',
       '    <div id="invite-result" class="mt-2" style="display:none;"></div>',
       '  </div>',
       '  <div class="modal-footer">',
@@ -2012,83 +1205,99 @@ class VeritasApp {
       let userInfo = '';
       if (txData.creatorId) {
         try {
-          const userResponse = await fetch('/api/users/' + txData.creatorId);
+          const userResponse = await fetch(\`/api/users/\${txData.creatorId}\`);
           const userResult = await userResponse.json();
           if (userResult.success) {
             const user = userResult.data;
-            userInfo = [
-              '<div style="background: #f3f4f6; padding: 1rem; border-radius: 0.5rem; margin-top: 1rem;">',
-              '  <h4 style="margin: 0 0 0.75rem 0; color: #1f2937;">User Information</h4>',
-              '  <div style="display: grid; gap: 0.5rem; font-size: 0.875rem;">',
-              '    <div><strong>Email:</strong> ' + (user.email || 'N/A') + '</div>',
-              '    <div><strong>Account Type:</strong> <span style="text-transform: capitalize;">' + (user.accountType || 'N/A') + '</span></div>',
-              '    <div><strong>Created:</strong> ' + (user.createdAt ? new Date(user.createdAt).toLocaleString() : 'N/A') + '</div>',
-              '    <div><strong>User ID:</strong> <code style="font-size: 0.75rem;">' + user.id + '</code></div>',
-              '  </div>',
-              '</div>'
-            ].join('');
+            userInfo = \`
+              <div style="background: #f3f4f6; padding: 1rem; border-radius: 0.5rem; margin-top: 1rem;">
+                <h4 style="margin: 0 0 0.75rem 0; color: #1f2937;">User Information</h4>
+                <div style="display: grid; gap: 0.5rem; font-size: 0.875rem;">
+                  <div><strong>Email:</strong> \${user.email || 'N/A'}</div>
+                  <div><strong>Account Type:</strong> <span style="text-transform: capitalize;">\${user.accountType || 'N/A'}</span></div>
+                  <div><strong>Created:</strong> \${user.createdAt ? new Date(user.createdAt).toLocaleString() : 'N/A'}</div>
+                  <div><strong>User ID:</strong> <code style="font-size: 0.75rem;">\${user.id}</code></div>
+                </div>
+              </div>
+            \`;
           }
         } catch (err) {
           console.error('Failed to fetch user info:', err);
         }
       }
       
-      // Build modal HTML using string concatenation
-      const modalHtml = [
-        '<div style="max-height: 70vh; overflow-y: auto;">',
-        '  <div style="margin-bottom: 1.5rem;">',
-        '    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">',
-        '      <h3 style="margin: 0; color: #1f2937;">Transaction #' + txId + '</h3>',
-        '      <span style="background: #fef3c7; color: #92400e; padding: 0.25rem 0.75rem; border-radius: 0.375rem; font-size: 0.75rem; font-weight: 600;">' + transaction.type + '</span>',
-        '    </div>',
-        '    <div style="display: grid; gap: 0.75rem; font-size: 0.875rem;">',
-        '      <div>',
-        '        <div style="color: #6b7280; font-size: 0.75rem; margin-bottom: 0.25rem;">Transaction ID</div>',
-        '        <code style="background: #f3f4f6; padding: 0.5rem; border-radius: 0.25rem; display: block; font-size: 0.75rem;">' + transaction.id + '</code>',
-        '      </div>',
-        '      <div>',
-        '        <div style="color: #6b7280; font-size: 0.75rem; margin-bottom: 0.25rem;">Asset ID</div>',
-        '        <code style="background: #f3f4f6; padding: 0.5rem; border-radius: 0.25rem; display: block; font-size: 0.75rem;">' + (txData.assetId || 'N/A') + '</code>',
-        '      </div>',
-        '      <div>',
-        '        <div style="color: #6b7280; font-size: 0.75rem; margin-bottom: 0.25rem;">Token ID</div>',
-        '        <code style="background: #f3f4f6; padding: 0.5rem; border-radius: 0.25rem; display: block; font-size: 0.75rem;">' + (txData.tokenId || 'N/A') + '</code>',
-        '      </div>',
-        '      <div>',
-        '        <div style="color: #6b7280; font-size: 0.75rem; margin-bottom: 0.25rem;">Document Title</div>',
-        '        <div>' + (txData.title || 'N/A') + '</div>',
-        '      </div>',
-        '      <div>',
-        '        <div style="color: #6b7280; font-size: 0.75rem; margin-bottom: 0.25rem;">Document Type</div>',
-        '        <div style="text-transform: capitalize;">' + (txData.documentType || 'N/A') + '</div>',
-        '      </div>',
-        '      <div>',
-        '        <div style="color: #6b7280; font-size: 0.75rem; margin-bottom: 0.25rem;">IPFS Hash</div>',
-        '        <code style="background: #f3f4f6; padding: 0.5rem; border-radius: 0.25rem; display: block; font-size: 0.75rem;">' + (txData.ipfsHash || 'N/A') + '</code>',
-        '      </div>',
-        '      <div>',
-        '        <div style="color: #6b7280; font-size: 0.75rem; margin-bottom: 0.25rem;">Ethereum TX</div>',
-        '        <code style="background: #f3f4f6; padding: 0.5rem; border-radius: 0.25rem; display: block; font-size: 0.75rem;">' + (txData.ethereumTxHash || 'N/A') + '</code>',
-        '      </div>',
-        '      <div>',
-        '        <div style="color: #6b7280; font-size: 0.75rem; margin-bottom: 0.25rem;">Stripe Session</div>',
-        '        <code style="background: #f3f4f6; padding: 0.5rem; border-radius: 0.25rem; display: block; font-size: 0.75rem;">' + (txData.stripeSessionId || 'N/A') + '</code>',
-        '      </div>',
-        '      <div>',
-        '        <div style="color: #6b7280; font-size: 0.75rem; margin-bottom: 0.25rem;">Paid Amount</div>',
-        '        <div>$' + (txData.paidAmount || '25') + '</div>',
-        '      </div>',
-        '      <div>',
-        '        <div style="color: #6b7280; font-size: 0.75rem; margin-bottom: 0.25rem;">Created At</div>',
-        '        <div>' + new Date(transaction.timestamp).toLocaleString() + '</div>',
-        '      </div>',
-        '    </div>',
-        userInfo,
-        '  </div>',
-        '</div>'
-      ].join('');
-      
-      this.showModal('Transaction Details', modalHtml);
+      // Show modal with all details
+      this.showModal('Transaction Details', \`
+        <div style="max-height: 70vh; overflow-y: auto;">
+          <div style="margin-bottom: 1.5rem;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+              <h3 style="margin: 0; color: #1f2937;">Transaction #\${txId}</h3>
+              <span style="background: #fef3c7; color: #92400e; padding: 0.25rem 0.75rem; border-radius: 0.375rem; font-size: 0.75rem; font-weight: 600;">
+                \${transaction.type}
+              </span>
+            </div>
+            
+            <div style="display: grid; gap: 0.75rem; font-size: 0.875rem;">
+              <div>
+                <div style="color: #6b7280; font-size: 0.75rem; margin-bottom: 0.25rem;">Transaction ID</div>
+                <code style="background: #f3f4f6; padding: 0.5rem; border-radius: 0.25rem; display: block; font-size: 0.75rem;">\${transaction.id}</code>
+              </div>
+              
+              <div>
+                <div style="color: #6b7280; font-size: 0.75rem; margin-bottom: 0.25rem;">Asset ID</div>
+                <code style="background: #f3f4f6; padding: 0.5rem; border-radius: 0.25rem; display: block; font-size: 0.75rem;">\${txData.assetId || 'N/A'}</code>
+              </div>
+              
+              <div>
+                <div style="color: #6b7280; font-size: 0.75rem; margin-bottom: 0.25rem;">Token ID</div>
+                <code style="background: #f3f4f6; padding: 0.5rem; border-radius: 0.25rem; display: block; font-size: 0.75rem;">\${txData.tokenId || 'N/A'}</code>
+              </div>
+              
+              <div>
+                <div style="color: #6b7280; font-size: 0.75rem; margin-bottom: 0.25rem;">Document Title</div>
+                <div>\${txData.title || 'N/A'}</div>
+              </div>
+              
+              <div>
+                <div style="color: #6b7280; font-size: 0.75rem; margin-bottom: 0.25rem;">Document Type</div>
+                <div style="text-transform: capitalize;">\${txData.documentType || 'N/A'}</div>
+              </div>
+              
+              <div>
+                <div style="color: #6b7280; font-size: 0.75rem; margin-bottom: 0.25rem;">IPFS Hash</div>
+                <code style="background: #f3f4f6; padding: 0.5rem; border-radius: 0.25rem; display: block; font-size: 0.75rem;">\${txData.ipfsHash || 'N/A'}</code>
+              </div>
+              
+              <div>
+                <div style="color: #6b7280; font-size: 0.75rem; margin-bottom: 0.25rem;">Ethereum TX</div>
+                <code style="background: #f3f4f6; padding: 0.5rem; border-radius: 0.25rem; display: block; font-size: 0.75rem;">\${txData.ethereumTxHash || 'N/A'}</code>
+              </div>
+              
+              <div>
+                <div style="color: #6b7280; font-size: 0.75rem; margin-bottom: 0.25rem;">Stripe Session</div>
+                <code style="background: #f3f4f6; padding: 0.5rem; border-radius: 0.25rem; display: block; font-size: 0.75rem;">\${txData.stripeSessionId || 'N/A'}</code>
+              </div>
+              
+              <div>
+                <div style="color: #6b7280; font-size: 0.75rem; margin-bottom: 0.25rem;">Paid Amount</div>
+                <div>\$\${txData.paidAmount || '25'}</div>
+              </div>
+              
+              <div>
+                <div style="color: #6b7280; font-size: 0.75rem; margin-bottom: 0.25rem;">Created At</div>
+                <div>\${new Date(transaction.timestamp).toLocaleString()}</div>
+              </div>
+            </div>
+            
+            \${userInfo}
+          </div>
+        </div>
+      \`;
+        
+        document.body.appendChild(modal);
+      } else {
+        this.showAlert('error', 'Failed to load document details');
+      }
     } catch (error) {
       console.error('View document error:', error);
       this.showAlert('error', 'Error loading document: ' + error.message);
@@ -2224,14 +1433,14 @@ app.get('/demo', async (c) => {
     </style>
 </head>
 <body>
-    <h1>[SECURE] Veritas Documents - Web3 Integration Demo</h1>
+    <h1>🔐 Veritas Documents - Web3 Integration Demo</h1>
     <p>Demonstrating IPFS storage and Ethereum anchoring with post-quantum cryptography</p>
     <div class="card">
         <h3>Web3 Integration Status</h3>
-        <p>[OK] IPFS Client implemented with Cloudflare Gateway</p>
-        <p>[OK] Ethereum Anchoring using Maatara post-quantum signatures</p>
-        <p>[OK] Enhanced asset handlers with Web3 capabilities</p>
-        <p>[CONFIG] Ready for testing with real credentials</p>
+        <p>✅ IPFS Client implemented with Cloudflare Gateway</p>
+        <p>✅ Ethereum Anchoring using Maatara post-quantum signatures</p>
+        <p>✅ Enhanced asset handlers with Web3 capabilities</p>
+        <p>🔧 Ready for testing with real credentials</p>
         
         <h4>Available Endpoints:</h4>
         <ul>
@@ -2378,7 +1587,7 @@ app.get('/success', async (c) => {
 </head>
 <body>
   <div class="success-container">
-    <div class="success-icon">[SUCCESS]</div>
+    <div class="success-icon">✅</div>
     <h1 class="success-title">Payment Successful!</h1>
     <p class="success-message">
       Your asset has been created and payment has been received.
@@ -2386,17 +1595,17 @@ app.get('/success', async (c) => {
     </p>
 
     <div class="processing-info">
-      <h3>[PROCESSING] Asset Registration in Progress</h3>
+      <h3>⏳ Asset Registration in Progress</h3>
       <p>
         Your document is now securely stored on IPFS with post-quantum encryption.
         <strong>Blockchain registration is currently being processed.</strong>
       </p>
       <p style="margin-top: 1rem;">
-        [TIME] <strong>Processing Time:</strong> Please allow up to 24 hours for your asset 
+        ⏱️ <strong>Processing Time:</strong> Please allow up to 24 hours for your asset 
         to be permanently registered on the Veritas Documents Chain (VDC).
       </p>
       <p>
-        [EMAIL] <strong>Notification:</strong> We will email you once your asset registration 
+        📧 <strong>Notification:</strong> We will email you once your asset registration 
         is confirmed on the blockchain.
       </p>
       <p style="margin-top: 1rem; font-size: 0.9rem; color: #64748b;">
@@ -2416,7 +1625,7 @@ app.get('/success', async (c) => {
         <dd>${sessionId}</dd>
         ` : ''}
         <dt>Status</dt>
-        <dd>[SUCCESS] Payment Completed | [PROCESSING] Blockchain Registration Pending</dd>
+        <dd>✅ Payment Completed | ⏳ Blockchain Registration Pending</dd>
       </dl>
     </div>
     ` : ''}

@@ -161,9 +161,7 @@ app.post('/api/stripe/webhook', async (c) => {
           ipfsHash: asset.ipfsHash,
           ipfsMetadataHash: asset.ipfsMetadataHash,
           documentR2Key: asset.storage?.documentR2Key,
-          createdAt: asset.createdAt,
-          title: asset.title,
-          documentType: asset.documentType
+          createdAt: asset.createdAt
         };
 
   const { transaction } = await vdc.addAdminAction('register_asset', payload);
@@ -2066,12 +2064,26 @@ class VeritasApp {
       '  <section class="card" style="margin: 1rem 0;">',
       '    <h3 class="card-title">Blockchain Maintenance</h3>',
       '    <div style="display: flex; gap: 0.75rem; flex-wrap: wrap;">',
+  '      <button id="run-maintenance-btn" class="btn btn-primary">',
+  '        <span style="margin-right: 0.5rem;">[VERIFY]</span>',
+  '        Run Full Maintenance',
+  '      </button>',
+  '      <label style="display:flex; align-items:center; gap:0.35rem;">',
+  '        <input type="checkbox" id="maintenance-relaxed"/>',
+  '        <span>Relaxed verify</span>',
+  '      </label>',
       '      <button id="rebuild-index-btn" class="btn btn-secondary">',
       '        <span style="margin-right: 0.5rem;">[SYNC]</span>',
       '        Rebuild Transaction Indexes',
       '      </button>',
+      '      <button id="view-maintenance-logs-btn" class="btn">',
+      '        <span style="margin-right: 0.5rem;">[LOGS]</span>',
+      '        View Past Logs',
+      '      </button>',
       '    </div>',
+      '    <div id="maintenance-status" style="margin-top: 0.75rem; display: none;"></div>',
       '    <div id="rebuild-index-result" style="margin-top: 0.75rem; display: none;"></div>',
+      '    <div id="maintenance-logs" style="margin-top: 0.75rem; display: none;"></div>',
       '  </section>',
       '  <div id="admin-content">',
       '    <div class="loading"><div class="spinner"></div><p>Loading pending transactions...</p></div>',
@@ -2117,6 +2129,65 @@ class VeritasApp {
       };
     }
 
+    // Wire maintenance buttons
+    const runMaintBtn = document.getElementById('run-maintenance-btn');
+    const maintStatus = document.getElementById('maintenance-status');
+    if (runMaintBtn) {
+      runMaintBtn.onclick = async () => {
+        try {
+          if (!this.sessionToken) throw new Error('Session expired. Please log in again.');
+          runMaintBtn.setAttribute('disabled', 'true');
+          runMaintBtn.textContent = 'Running maintenance…';
+          if (maintStatus) {
+            maintStatus.style.display = 'block';
+            maintStatus.className = '';
+            maintStatus.innerHTML = '<div class="loading"><div class="spinner"></div><p>Verifying chain, syncing storage tiers, and rebuilding indexes…</p></div>';
+          }
+          const relaxedInputEl = document.getElementById('maintenance-relaxed');
+          let relaxed = false;
+          if (relaxedInputEl instanceof HTMLInputElement) {
+            relaxed = !!relaxedInputEl.checked;
+          }
+          const resp = await fetch('/api/vdc/maintenance/run', {
+            method: 'POST',
+            headers: { 'Authorization': 'Bearer ' + this.sessionToken, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ relaxed })
+          });
+          const data = await resp.json();
+          if (!data.success) throw new Error(data.error || 'Maintenance failed');
+          const summary = data.data && data.data.summary ? data.data.summary : {};
+          const logId = data.data && data.data.logId;
+          if (maintStatus) {
+            maintStatus.style.display = 'block';
+            maintStatus.className = 'alert alert-success';
+            maintStatus.innerHTML = [
+              '<strong>[OK] Maintenance completed</strong><br>',
+              '<div class="text-muted" style="margin-top: 0.25rem;">Mode: ' + (data.data && data.data.mode ? data.data.mode : (relaxed ? 'relaxed' : 'strict')) + '</div>',
+              'Verified: ' + (summary.verified || 0) + ', ',
+              'Repaired: ' + (summary.repaired || 0) + ', ',
+              'Errors: ' + (summary.errors || 0) + '<br>',
+              'Indexed: ' + (summary.indexed || 0) + ', ',
+              'Index errors: ' + (summary.indexErrors || 0),
+              logId ? '<div style="margin-top: 0.5rem;"><button class="btn btn-secondary btn-sm" id="open-maint-log">Open Log</button></div>' : ''
+            ].join('');
+            const openBtn = document.getElementById('open-maint-log');
+            if (openBtn && logId) {
+              openBtn.addEventListener('click', () => this.viewMaintenanceLog(logId));
+            }
+          }
+        } catch (err) {
+          if (maintStatus) {
+            maintStatus.style.display = 'block';
+            maintStatus.className = 'alert alert-error';
+            maintStatus.textContent = (err && err.message) ? err.message : String(err);
+          }
+        } finally {
+          runMaintBtn.removeAttribute('disabled');
+          runMaintBtn.innerHTML = '<span style="margin-right: 0.5rem;">[VERIFY]</span>Run Full Maintenance';
+        }
+      };
+    }
+
     // Wire rebuild index button
     const rebuildBtn = document.getElementById('rebuild-index-btn');
     const rebuildResult = document.getElementById('rebuild-index-result');
@@ -2155,6 +2226,65 @@ class VeritasApp {
         } finally {
           rebuildBtn.disabled = false;
           rebuildBtn.innerHTML = '<span style="margin-right: 0.5rem;">[SYNC]</span>Rebuild Transaction Indexes';
+        }
+      };
+    }
+
+    // Wire view logs button
+    const viewLogsBtn = document.getElementById('view-maintenance-logs-btn');
+    const logsContainer = document.getElementById('maintenance-logs');
+    if (viewLogsBtn) {
+      viewLogsBtn.onclick = async () => {
+        try {
+          if (!this.sessionToken) throw new Error('Session expired. Please log in again.');
+          viewLogsBtn.setAttribute('disabled', 'true');
+          if (logsContainer) {
+            logsContainer.style.display = 'block';
+            logsContainer.innerHTML = '<div class="loading"><div class="spinner"></div><p>Loading logs…</p></div>';
+          }
+          const resp = await fetch('/api/vdc/maintenance/logs', { headers: { 'Authorization': 'Bearer ' + this.sessionToken } });
+          const data = await resp.json();
+          if (!data.success) throw new Error(data.error || 'Failed to load logs');
+          const list = Array.isArray(data.data) ? data.data : [];
+          if (logsContainer) {
+            if (list.length === 0) {
+              logsContainer.innerHTML = '<p class="text-center text-muted">No maintenance logs found.</p>';
+            } else {
+              logsContainer.innerHTML = [
+                '<div class="card">',
+                '  <h4 class="card-title" style="margin-bottom: 0.5rem;">Past Maintenance Logs</h4>',
+                '  <div style="display: grid; gap: 0.5rem;">',
+                list.map((item) => (
+                  '<div class="list-item" style="display:flex; justify-content: space-between; align-items:center; gap: 0.5rem;">' +
+                    '<div>' +
+                      '<div style="font-weight:600;">' + item.id + '</div>' +
+                      '<div style="font-size: 0.8rem; color:#6b7280;">' + (item.createdAt ? new Date(item.createdAt).toLocaleString() : '') + ' • ' + (item.size || 0) + ' bytes</div>' +
+                    '</div>' +
+                    '<div style="display:flex; gap:0.5rem;">' +
+                      '<button class="btn btn-secondary btn-sm" data-log-id="' + item.id + '">Open</button>' +
+                    '</div>' +
+                  '</div>'
+                )).join('') +
+                '  </div>',
+                '</div>'
+              ].join('');
+              // Bind open buttons
+              const buttons = logsContainer.querySelectorAll('button[data-log-id]');
+              buttons.forEach((btn) => {
+                btn.addEventListener('click', () => {
+                  const id = btn.getAttribute('data-log-id');
+                  if (id) this.viewMaintenanceLog(id);
+                });
+              });
+            }
+          }
+        } catch (err) {
+          if (logsContainer) {
+            logsContainer.style.display = 'block';
+            logsContainer.innerHTML = '<div class="alert alert-error">' + ((err && err.message) ? err.message : String(err)) + '</div>';
+          }
+        } finally {
+          viewLogsBtn.removeAttribute('disabled');
         }
       };
     }
@@ -2596,6 +2726,39 @@ class VeritasApp {
     modal.className = 'modal';
     modal.innerHTML = '<div class="modal-content"><div class="modal-header"><h3 class="modal-title">' + title + '</h3><button class="modal-close" onclick="this.closest(\\'.modal\\').remove()">&times;</button></div><div class="modal-body">' + bodyHtml + '</div></div>';
     document.body.appendChild(modal);
+  }
+
+  async viewMaintenanceLog(logId) {
+    try {
+      if (!this.sessionToken) throw new Error('Session expired. Please log in again.');
+      const resp = await fetch('/api/vdc/maintenance/logs/' + logId, { headers: { 'Authorization': 'Bearer ' + this.sessionToken } });
+      if (resp.status === 404) throw new Error('Log not found');
+      const text = await resp.text();
+      let pretty = text;
+      try { pretty = JSON.stringify(JSON.parse(text), null, 2); } catch {}
+      const body = '<pre style="max-height:60vh; overflow:auto; background:#0f172a; color:#e5e7eb; padding:1rem; border-radius:0.5rem;">' + this.escapeHtml(pretty) + '</pre>' +
+                   '<div style="margin-top:0.5rem;"><button class="btn btn-secondary btn-sm" id="download-log-btn">Download</button></div>';
+      this.showModal('Maintenance Log ' + logId, body);
+      const btn = document.getElementById('download-log-btn');
+      if (btn) {
+        btn.addEventListener('click', async () => {
+          const blob = new Blob([text], { type: 'application/json' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url; a.download = logId + '.json'; a.click();
+          URL.revokeObjectURL(url);
+        });
+      }
+    } catch (err) {
+      this.showAlert('error', (err && err.message) ? err.message : String(err));
+    }
+  }
+
+  escapeHtml(s) {
+    return String(s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
   }
 }
 

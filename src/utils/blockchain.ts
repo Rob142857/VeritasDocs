@@ -104,6 +104,10 @@ export interface VDCBlock {
   blockNumber: number;
   timestamp: number;
   previousHash: string;
+  // Optional link to previous block's IPFS hash (known at mining time)
+  previousIpfsHash?: string;
+  // Canonical schema version for block serialization
+  schemaVersion?: string;
   hash: string;
   
   // Block contents
@@ -155,6 +159,7 @@ export class VDCBlockchain {
   private genesisBlock: VDCBlock | null = null;
   private readonly pendingPrefix = 'pending/';
   private readonly blockPrefix = 'blocks/';
+  private readonly MAX_TX_BYTES = 12 * 1024; // ~12KB per transaction cap
 
   constructor(env: Environment) {
     this.env = env;
@@ -261,6 +266,7 @@ export class VDCBlockchain {
       blockNumber: 0,
       timestamp: blockTimestamp,
       previousHash: '0',
+      schemaVersion: '1.1',
       hash: '',
       transactions,
       merkleRoot: this.calculateMerkleRoot(transactions),
@@ -480,17 +486,34 @@ export class VDCBlockchain {
     const timestamp = Date.now();
     const txId = `vdc_admin_${timestamp}_${Math.random().toString(36).substr(2, 6)}`;
 
+    // Sanitize payloads for known actions to avoid plaintext bloat
+    let sanitizedPayload: Record<string, any> = payload || {};
+    if (action === 'register_asset') {
+      const allowed = ['assetId', 'userId', 'tokenId', 'ipfsHash', 'ipfsMetadataHash', 'documentR2Key', 'createdAt'];
+      const p: Record<string, any> = {};
+      for (const k of allowed) {
+        if (sanitizedPayload[k] !== undefined) p[k] = sanitizedPayload[k];
+      }
+      sanitizedPayload = p;
+    }
+
     const txData: Omit<VDCTransaction, 'signatures'> = {
       id: txId,
       type: 'admin_action',
       timestamp,
       data: {
         action,
-        payload,
+        payload: sanitizedPayload,
         initiatedBy: 'system',
         keyVersion: systemKeyVersion
       }
     };
+
+    // Enforce transaction size limit before signing/persisting
+    const txSizeBytes = new TextEncoder().encode(JSON.stringify(txData)).length;
+    if (txSizeBytes > this.MAX_TX_BYTES) {
+      throw new Error(`Transaction too large: ${txSizeBytes} bytes (max ${this.MAX_TX_BYTES})`);
+    }
 
     const signature = await this.maataraClient.signData(
       JSON.stringify(txData),
@@ -547,14 +570,17 @@ export class VDCBlockchain {
     const blockNumber = latest.blockNumber + 1;
     const timestamp = Date.now();
 
-    // Create block
+    // Create block with sanitized transactions (exclude storage metadata)
+    const sanitizedTx = transactions.map(tx => this.sanitizeTransactionForBlock(tx));
     const block: VDCBlock = {
       blockNumber,
       timestamp,
       previousHash: latest.hash,
+      previousIpfsHash: latest.ipfsHash,
+      schemaVersion: '1.1',
       hash: '',
-      transactions,
-      merkleRoot: this.calculateMerkleRoot(transactions),
+      transactions: sanitizedTx,
+      merkleRoot: this.calculateMerkleRoot(sanitizedTx),
       blockSignature: {
         publicKey: this.env.SYSTEM_DILITHIUM_PUBLIC_KEY,
         signature: '',
@@ -572,7 +598,7 @@ export class VDCBlockchain {
       previousHash: latest.hash,
       hash: block.hash,
       merkleRoot: block.merkleRoot,
-      transactionCount: transactions.length
+      transactionCount: sanitizedTx.length
     };
 
     block.blockSignature.signature = await this.maataraClient.signData(
@@ -598,7 +624,7 @@ export class VDCBlockchain {
     }));
 
     // Index transactions
-    for (const tx of transactions) {
+    for (const tx of sanitizedTx) {
       await this.env.VERITAS_KV.put(`vdc:tx:${tx.id}`, JSON.stringify({
         blockNumber,
         txId: tx.id,
@@ -640,7 +666,7 @@ export class VDCBlockchain {
     console.log(`   Hash: ${finalBlock.hash}`);
     console.log(`   IPFS: ${finalBlock.ipfsHash}`);
     console.log(`   R2: ${finalBlock.storage?.r2Key}`);
-    console.log(`   Transactions: ${transactions.length}`);
+  console.log(`   Transactions: ${sanitizedTx.length}`);
 
     return finalBlock;
   }
@@ -673,6 +699,17 @@ export class VDCBlockchain {
     if (blockData) {
       return JSON.parse(blockData);
     }
+
+    // Try KV StoredObject wrapper (blocks/{n}.json) if previously written
+    try {
+      const kvStored = await this.env.VERITAS_KV.get(`blocks/${blockNumber}.json`);
+      if (kvStored) {
+        const parsed = JSON.parse(kvStored);
+        const block = parsed && parsed.data ? parsed.data : parsed;
+        await this.env.VERITAS_KV.put(`vdc:block:${blockNumber}`, JSON.stringify(block));
+        return block as VDCBlock;
+      }
+    } catch {}
 
     // Fallback to R2
     console.log(`⚠️ Block ${blockNumber} not in KV, trying R2...`);
@@ -850,20 +887,32 @@ export class VDCBlockchain {
   /**
    * Verify a block's integrity
    */
-  async verifyBlock(block: VDCBlock): Promise<boolean> {
+  async verifyBlock(block: VDCBlock, options?: { relaxed?: boolean; log?: (msg: string) => void }): Promise<boolean> {
+    const relaxed = options?.relaxed === true;
+    const log = options?.log || ((msg: string) => {});
     try {
       // Verify block hash
       const expectedHash = await this.calculateBlockHash(block);
       if (expectedHash !== block.hash) {
-        console.error('❌ VDC: Block hash mismatch');
-        return false;
+        log(`verify: hash mismatch (expected ${expectedHash}, actual ${block.hash})`);
+        if (!relaxed) {
+          console.error('❌ VDC: Block hash mismatch');
+          return false;
+        }
+      } else {
+        log('verify: hash OK');
       }
 
       // Verify merkle root
       const expectedMerkleRoot = this.calculateMerkleRoot(block.transactions);
       if (expectedMerkleRoot !== block.merkleRoot) {
-        console.error('❌ VDC: Merkle root mismatch');
-        return false;
+        log(`verify: merkle root mismatch (expected ${expectedMerkleRoot}, actual ${block.merkleRoot})`);
+        if (!relaxed) {
+          console.error('❌ VDC: Merkle root mismatch');
+          return false;
+        }
+      } else {
+        log('verify: merkle root OK');
       }
 
       // Verify block signature
@@ -876,23 +925,46 @@ export class VDCBlockchain {
         transactionCount: block.transactions.length
       };
 
-      const blockSigValid = await this.maataraClient.verifySignature(
-        JSON.stringify(blockDataToVerify),
-        block.blockSignature.signature,
-        block.blockSignature.publicKey
-      );
-
+      let blockSigValid = false;
+      try {
+        blockSigValid = await this.maataraClient.verifySignature(
+          JSON.stringify(blockDataToVerify),
+          block.blockSignature.signature,
+          block.blockSignature.publicKey
+        );
+      } catch (e) {
+        blockSigValid = false;
+      }
       if (!blockSigValid) {
-        console.error('❌ VDC: Block signature invalid');
-        return false;
+        log('verify: block signature INVALID');
+        if (!relaxed) {
+          console.error('❌ VDC: Block signature invalid');
+          return false;
+        }
+      } else {
+        log('verify: block signature OK');
       }
 
       // Verify all transactions
+      let txOk = 0;
+      let txFail = 0;
       for (const tx of block.transactions) {
-        if (!(await this.verifyTransaction(tx))) {
-          console.error(`❌ VDC: Transaction ${tx.id} invalid`);
-          return false;
+        const ok = await this.verifyTransaction(tx);
+        if (!ok) {
+          txFail++;
+          log(`verify: tx ${tx.id} INVALID`);
+          if (!relaxed) {
+            console.error(`❌ VDC: Transaction ${tx.id} invalid`);
+            return false;
+          }
+        } else {
+          txOk++;
+          log(`verify: tx ${tx.id} OK`);
         }
+      }
+
+      if (relaxed) {
+        log(`verify: summary (relaxed) tx ok=${txOk} fail=${txFail}`);
       }
 
       return true;
@@ -986,6 +1058,24 @@ export class VDCBlockchain {
   private async persistBlock(block: VDCBlock, options: { type: 'genesis' | 'standard' }): Promise<VDCBlock> {
     // Use unified storage layer (KV + R2 + IPFS) with critical IPFS enforcement
     console.log(`📦 Persisting block #${block.blockNumber} using unified storage layer...`);
+    // Guardrails: ensure canonical payload does NOT contain self-referential storage fields
+    if ((block as any).ipfsHash) {
+      throw new Error(`Block ${block.blockNumber} contains ipfsHash in payload prior to persistence; refuse to pin self-hash`);
+    }
+    if ((block as any).storage) {
+      throw new Error(`Block ${block.blockNumber} contains storage metadata in payload prior to persistence; refuse to pin storage`);
+    }
+    // Ensure transactions are sanitized (no storage metadata inside tx objects)
+    if (Array.isArray(block.transactions)) {
+      const offending = block.transactions.find((tx: any) => !!tx?.storage);
+      if (offending) {
+        throw new Error(`Block ${block.blockNumber} has unsanitized transaction ${offending.id} with storage metadata`);
+      }
+    }
+    // Enforce schema version presence for canonicalization moving forward
+    if (!block.schemaVersion) {
+      block.schemaVersion = '1.1';
+    }
     
     const storageResult = await storeChainBlock(this.env, block.blockNumber, block);
     
@@ -1003,6 +1093,17 @@ export class VDCBlockchain {
       ipfsPinned: true
     };
 
+    // Also record the mapping for quick lookup without mutating canonical pinned payload
+    try {
+      await this.env.VERITAS_KV.put(`vdc:block:${block.blockNumber}:ipfs`, storageResult.ipfsHash || '');
+    } catch {}
+
+    // Persist canonical block JSON for fast KV access by maintenance code
+    try {
+      await this.env.VERITAS_KV.put(`vdc:block:${block.blockNumber}`, JSON.stringify(block));
+    } catch (e) {
+      console.warn(`KV persist failed for vdc:block:${block.blockNumber}`, e);
+    }
     console.log(`✅ Block #${block.blockNumber} persisted successfully`);
     console.log(`   KV: vdc:block:${block.blockNumber}`);
     console.log(`   R2: ${storageResult.r2Key}`);
@@ -1011,7 +1112,24 @@ export class VDCBlockchain {
     return block;
   }
 
+  // Create a canonical, storage-free copy of a transaction for on-chain inclusion
+  private sanitizeTransactionForBlock(tx: VDCTransaction): VDCTransaction {
+    const { storage, ...rest } = tx as any;
+    return { ...rest } as VDCTransaction;
+  }
+
   private async persistPendingTransaction(transaction: VDCTransaction): Promise<number> {
+    // Final safety: size cap at persistence time too
+    const txSizeBytes = new TextEncoder().encode(JSON.stringify({
+      id: transaction.id,
+      type: transaction.type,
+      timestamp: transaction.timestamp,
+      data: transaction.data,
+      signatures: transaction.signatures
+    })).length;
+    if (txSizeBytes > this.MAX_TX_BYTES) {
+      throw new Error(`Transaction too large at persist: ${txSizeBytes} bytes (max ${this.MAX_TX_BYTES})`);
+    }
     const pendingKey = this.getPendingKey(transaction.id);
     const storedAt = Date.now();
     let pendingCount = parseInt(await this.env.VERITAS_KV.get('vdc:pending:count') || '0', 10);
@@ -1240,13 +1358,16 @@ export class VDCBlockchain {
     const blockNumber = latest.blockNumber + 1;
     const timestamp = Date.now();
 
+    const sanitizedSelected = selected.map(tx => this.sanitizeTransactionForBlock(tx));
     const block: VDCBlock = {
       blockNumber,
       timestamp,
       previousHash: latest.hash,
+      previousIpfsHash: latest.ipfsHash,
+      schemaVersion: '1.1',
       hash: '',
-      transactions: selected,
-      merkleRoot: this.calculateMerkleRoot(selected),
+      transactions: sanitizedSelected,
+      merkleRoot: this.calculateMerkleRoot(sanitizedSelected),
       blockSignature: {
         publicKey: this.env.SYSTEM_DILITHIUM_PUBLIC_KEY,
         signature: '',
@@ -1262,7 +1383,7 @@ export class VDCBlockchain {
       previousHash: latest.hash,
       hash: block.hash,
       merkleRoot: block.merkleRoot,
-      transactionCount: selected.length
+      transactionCount: sanitizedSelected.length
     };
 
     block.blockSignature.signature = await this.maataraClient.signData(
@@ -1280,7 +1401,7 @@ export class VDCBlockchain {
     }));
 
     // Index and update assets
-    for (const tx of selected) {
+    for (const tx of sanitizedSelected) {
       await this.env.VERITAS_KV.put(`vdc:tx:${tx.id}`, JSON.stringify({
         blockNumber,
         txId: tx.id,

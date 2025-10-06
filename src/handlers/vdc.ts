@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { Environment, APIResponse, User } from '../types';
 import { initializeVDC } from '../utils/blockchain';
+import { IPFSClient } from '../utils/ipfs';
 import { storeChainBlock } from '../utils/store';
 
 const vdcHandler = new Hono<{ Bindings: Environment }>();
@@ -123,6 +124,73 @@ vdcHandler.post('/initialize-genesis', async (c) => {
 
     console.error('VDC initialize-genesis error:', error);
     return c.json<APIResponse>({ success: false, error: message }, 500);
+  }
+});
+
+// Admin endpoint: migrate all blocks missing storage/ipfs metadata
+vdcHandler.post('/migrate-missing-storage', async (c) => {
+  let body: any = {};
+  try {
+    if (c.req.header('content-type')?.includes('application/json')) {
+      body = await c.req.json();
+    }
+  } catch {}
+
+  const adminSecret = extractAdminSecret(c.req.header('x-admin-secret'), body);
+  const authError = ensureAdminAccess(c, adminSecret);
+  if (authError) return authError;
+
+  try {
+    const env = c.env as Environment;
+    const vdc = await initializeVDC(env);
+
+    const latestData = await env.VERITAS_KV.get('vdc:latest');
+    if (!latestData) {
+      return c.json<APIResponse>({ success: false, error: 'Chain not initialized' }, 400);
+    }
+    const latest = JSON.parse(latestData);
+    const latestBlockNumber = latest.blockNumber as number;
+
+    let migrated = 0;
+    const details: Array<{ block: number; r2Key?: string; ipfsHash?: string; skipped?: boolean; error?: string }> = [];
+
+    for (let i = 0; i <= latestBlockNumber; i++) {
+      try {
+        const block = await vdc.getBlock(i);
+        if (!block) {
+          details.push({ block: i, error: 'not found' });
+          continue;
+        }
+        const missing = !block.storage?.r2Key || !block.ipfsHash || !block.storage?.ipfsHash;
+        if (!missing) {
+          details.push({ block: i, skipped: true, r2Key: block.storage?.r2Key, ipfsHash: block.ipfsHash });
+          continue;
+        }
+        const storageResult = await storeChainBlock(env, i, block);
+        if (!storageResult.success) {
+          details.push({ block: i, error: storageResult.error || 'storage failed' });
+          continue;
+        }
+        block.ipfsHash = storageResult.ipfsHash;
+        block.storage = {
+          r2Key: storageResult.r2Key!,
+          storedAt: storageResult.storedAt,
+          ipfsHash: storageResult.ipfsHash,
+          ipfsGatewayUrl: storageResult.ipfsGatewayUrl,
+          ipfsPinned: true
+        };
+        await env.VERITAS_KV.put(`vdc:block:${i}`, JSON.stringify(block));
+        migrated++;
+        details.push({ block: i, r2Key: storageResult.r2Key, ipfsHash: storageResult.ipfsHash });
+      } catch (err: any) {
+        details.push({ block: i, error: err?.message || 'error' });
+      }
+    }
+
+    return c.json<APIResponse>({ success: true, data: { latestBlockNumber, migrated, details } });
+  } catch (error: any) {
+    console.error('Migrate missing storage error:', error);
+    return c.json<APIResponse>({ success: false, error: error?.message || 'Failed to migrate blocks' }, 500);
   }
 });
 
@@ -628,3 +696,221 @@ vdcHandler.post('/rebuild-indexes', async (c) => {
 });
 
 export default vdcHandler;
+
+// --- Maintenance: verify chain, sync storage tiers, rebuild tx index, log results ---
+vdcHandler.post('/maintenance/run', async (c) => {
+  try {
+    // Prefer session-based admin auth
+    const user = await authenticateUser(c);
+    if (!user || user.accountType !== 'admin') {
+      return c.json<APIResponse>({ success: false, error: 'Admin access required' }, 403);
+    }
+
+    const env = c.env as Environment;
+    const vdc = await initializeVDC(env);
+    const ipfs = new IPFSClient(env);
+    // Accept relaxed verify mode and verbosity from request body (defaults: false)
+    let relaxed = false;
+    try {
+      const body = await c.req.json();
+      if (body && typeof body.relaxed === 'boolean') relaxed = body.relaxed;
+    } catch {}
+
+    const latestData = await env.VERITAS_KV.get('vdc:latest');
+    if (!latestData) {
+      return c.json<APIResponse>({ success: false, error: 'Chain not initialized' }, 400);
+    }
+
+    const latest = JSON.parse(latestData) as { blockNumber: number };
+    const latestBlockNumber = latest.blockNumber;
+
+    const results: any[] = [];
+    let verified = 0, repaired = 0, errors = 0;
+
+    for (let i = 0; i <= latestBlockNumber; i++) {
+      const entry: any = { block: i, steps: [] };
+      try {
+        entry.steps.push(`block ${i}: start`);
+        // Fetch from KV
+        let kvBlockRaw = await env.VERITAS_KV.get(`vdc:block:${i}`);
+        let kvBlock = kvBlockRaw ? JSON.parse(kvBlockRaw) : null;
+        entry.steps.push(`block ${i}: KV ${kvBlock ? 'found' : 'missing'}`);
+
+        // Fetch from R2
+        let r2Block: any = null;
+        const r2Obj = await env.VDC_STORAGE.get(`blocks/${i}.json`);
+        if (r2Obj) {
+          const r2Data = await r2Obj.json() as any;
+          r2Block = r2Data.data || r2Data;
+        }
+        entry.steps.push(`block ${i}: R2 ${r2Block ? 'found' : 'missing'}`);
+
+        // Fetch from IPFS if ipfsHash is known (prefer KV hash, fallback R2)
+        let ipfsBlock: any = null;
+        const ipfsHash = (kvBlock && kvBlock.ipfsHash) || (r2Block && r2Block.ipfsHash) || null;
+        if (ipfsHash) {
+          try {
+            const ipfsText = await ipfs.retrieveFromIPFS(ipfsHash);
+            ipfsBlock = JSON.parse(ipfsText);
+            if (ipfsBlock && ipfsBlock.data) ipfsBlock = ipfsBlock.data;
+          } catch {}
+        }
+        entry.steps.push(`block ${i}: IPFS ${ipfsBlock ? 'found' : (ipfsHash ? 'hash-known-not-fetched' : 'hash-unknown')}`);
+
+        // Choose best candidate that verifies
+        const candidates = [kvBlock, r2Block, ipfsBlock].filter(Boolean) as any[];
+        let good: any = null;
+        for (const cand of candidates) {
+          if (!cand) continue;
+          entry.steps.push(`block ${i}: verifying candidate from ${cand === kvBlock ? 'KV' : cand === r2Block ? 'R2' : 'IPFS'}`);
+          const ok = await vdc.verifyBlock(cand, { relaxed, log: (m) => entry.steps.push(`block ${i}: ${m}`) });
+          if (ok) { good = cand; break; }
+        }
+
+        // If none verify, try fallback: getBlock (which may restore from tiers)
+        if (!good) {
+          entry.steps.push(`block ${i}: attempting fallback getBlock()`);
+          const fetched = await vdc.getBlock(i);
+          if (fetched && await vdc.verifyBlock(fetched, { relaxed, log: (m) => entry.steps.push(`block ${i}: ${m}`) })) {
+            good = fetched;
+          }
+        }
+
+        if (!good) {
+          entry.status = 'error';
+          entry.message = 'No valid copy found or verification failed';
+          errors++;
+          results.push(entry);
+          continue;
+        }
+
+        entry.status = 'verified';
+        verified++;
+        entry.steps.push(`block ${i}: verification ${relaxed ? 'OK (relaxed)' : 'OK'}`);
+
+        // Repair missing/corrupted tiers by re-storing canonical block
+        const needKV = !kvBlockRaw || !(await vdc.verifyBlock(kvBlock, { relaxed }));
+        const needR2 = !r2Block || !(await vdc.verifyBlock(r2Block, { relaxed }));
+        const needIPFS = !ipfsHash;
+
+        if (needKV || needR2 || needIPFS) {
+          entry.steps.push(`block ${i}: repairing tiers -> KV:${needKV} R2:${needR2} IPFS:${needIPFS}`);
+          const storeRes = await storeChainBlock(env, i, good);
+          if (!storeRes.success) {
+            entry.repair = { success: false, error: storeRes.error };
+          } else {
+            entry.repair = {
+              success: true,
+              r2Key: storeRes.r2Key,
+              ipfsHash: storeRes.ipfsHash,
+              ipfsGatewayUrl: storeRes.ipfsGatewayUrl
+            };
+            repaired++;
+            entry.steps.push(`block ${i}: repair OK (r2Key=${storeRes.r2Key}, ipfs=${storeRes.ipfsHash})`);
+          }
+        }
+
+        results.push(entry);
+      } catch (err: any) {
+        entry.status = 'error';
+        entry.message = err?.message || 'Unknown error';
+        errors++;
+        results.push(entry);
+      }
+    }
+
+    // Rebuild transaction index
+    let indexed = 0, indexErrors = 0;
+    for (let blockNumber = 0; blockNumber <= latestBlockNumber; blockNumber++) {
+      const block = await vdc.getBlock(blockNumber);
+      if (!block || !block.transactions) continue;
+      for (const tx of block.transactions) {
+        try {
+          await env.VERITAS_KV.put(
+            `vdc:tx:${tx.id}`,
+            JSON.stringify({ blockNumber, blockHash: block.hash, txId: tx.id, type: tx.type, timestamp: tx.timestamp })
+          );
+          indexed++;
+        } catch (txErr) {
+          indexErrors++;
+        }
+      }
+    }
+
+    // Compose log
+    const log = {
+      startedAt: Date.now(),
+      latestBlockNumber,
+      summary: { verified, repaired, errors, indexed, indexErrors },
+      mode: relaxed ? 'relaxed' : 'strict',
+      results
+    };
+
+    // Store log to R2 and index in KV
+    const logId = `maint_${Date.now()}`;
+    const logKey = `maintenance/logs/${logId}.json`;
+    await env.VDC_STORAGE.put(logKey, JSON.stringify(log, null, 2), {
+      httpMetadata: { contentType: 'application/json' },
+      customMetadata: { logId, createdAt: Date.now().toString() }
+    });
+
+    const indexKey = 'maintenance:logs:index';
+    const existingIndex = await env.VERITAS_KV.get(indexKey);
+    const list = existingIndex ? JSON.parse(existingIndex) : [];
+    list.unshift({ id: logId, r2Key: logKey, createdAt: Date.now(), size: JSON.stringify(log).length });
+    if (list.length > 100) list.length = 100;
+    await env.VERITAS_KV.put(indexKey, JSON.stringify(list));
+
+    // Queue pending maintenance log admin action (to be mined later)
+    try {
+      // initializeVDC already above, so reuse instance method
+      const { transaction } = await vdc.addAdminAction('maintenance_log', {
+        logId,
+        r2Key: logKey,
+        summary: log.summary
+      });
+      // Record the queued tx id in KV for quick reference
+      await env.VERITAS_KV.put(`maintenance:log:${logId}:tx`, transaction.id);
+    } catch (queueErr) {
+      // Non-fatal: logging only
+      console.warn('Failed to queue maintenance_log admin action:', queueErr);
+    }
+
+    return c.json<APIResponse>({ success: true, data: { logId, r2Key: logKey, summary: log.summary } });
+  } catch (error: any) {
+    console.error('Maintenance run error:', error);
+    return c.json<APIResponse>({ success: false, error: error?.message || 'Maintenance failed' }, 500);
+  }
+});
+
+// List past maintenance logs (admin only)
+vdcHandler.get('/maintenance/logs', async (c) => {
+  const user = await authenticateUser(c);
+  if (!user || user.accountType !== 'admin') {
+    return c.json<APIResponse>({ success: false, error: 'Admin access required' }, 403);
+  }
+  const env = c.env as Environment;
+  const indexKey = 'maintenance:logs:index';
+  const existingIndex = await env.VERITAS_KV.get(indexKey);
+  const list = existingIndex ? JSON.parse(existingIndex) : [];
+  return c.json<APIResponse>({ success: true, data: list });
+});
+
+// Download a specific maintenance log (admin only)
+vdcHandler.get('/maintenance/logs/:id', async (c) => {
+  const user = await authenticateUser(c);
+  if (!user || user.accountType !== 'admin') {
+    return c.json<APIResponse>({ success: false, error: 'Admin access required' }, 403);
+  }
+  const env = c.env as Environment;
+  const id = c.req.param('id');
+  const indexKey = 'maintenance:logs:index';
+  const existingIndex = await env.VERITAS_KV.get(indexKey);
+  const list = existingIndex ? JSON.parse(existingIndex) : [];
+  const item = list.find((x: any) => x.id === id);
+  if (!item) return c.json<APIResponse>({ success: false, error: 'Log not found' }, 404);
+  const obj = await env.VDC_STORAGE.get(item.r2Key);
+  if (!obj) return c.json<APIResponse>({ success: false, error: 'Log object not found' }, 404);
+  const text = await obj.text();
+  return new Response(text, { headers: { 'Content-Type': 'application/json' } });
+});

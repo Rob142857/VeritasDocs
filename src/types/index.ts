@@ -28,7 +28,7 @@ export interface Asset {
   title: string;
   description: string;
   documentType: 'will' | 'deed' | 'certificate' | 'contract' | 'other';
-  ipfsHash: string;
+  ipfsHash?: string;
   encryptedData?: string; // Legacy support: Kyber-encrypted document (KV-stored)
   signature: string; // Dilithium signature
   createdAt: number;
@@ -49,8 +49,8 @@ export interface Asset {
     documentR2Key: string;
     storedAt: number;
     size: number;
-    ipfsHash: string;
-    ipfsGatewayUrl: string;
+    ipfsHash?: string;
+    ipfsGatewayUrl?: string;
     ipfsPinned?: boolean;
     encryption?: EncryptionMetadata;
   };
@@ -127,6 +127,8 @@ export interface Environment {
   IPFS_GATEWAY_URL: string;
   PINATA_API_KEY?: string;
   PINATA_SECRET_KEY?: string;
+  // Optional Pinata dedicated gateway (e.g., https://<subdomain>.mypinata.cloud)
+  PINATA_GATEWAY_URL?: string;
   // VDC System Master Keys (Cloudflare Secrets)
   SYSTEM_DILITHIUM_PRIVATE_KEY?: string;
   SYSTEM_DILITHIUM_PRIVATE_KEY_PART1?: string;

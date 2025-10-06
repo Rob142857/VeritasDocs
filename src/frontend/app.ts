@@ -47,6 +47,23 @@ async function ensureCryptoReady(): Promise<void> {
 export async function encryptDocumentData(data: string, publicKeyB64u: string): Promise<string> {
   await ensureCryptoReady();
   
+  // Optional gzip compression before encryption (smaller blocks/payloads)
+  async function gzipCompress(bytes: Uint8Array): Promise<Uint8Array> {
+    // Use CompressionStream if available; otherwise, return original
+    try {
+      // @ts-ignore - CompressionStream is a browser API
+      if (typeof (window as any).CompressionStream === 'function') {
+        // @ts-ignore
+        const cs = new (window as any).CompressionStream('gzip');
+        const body = new Response(bytes as any).body as ReadableStream<Uint8Array>;
+        const stream = body.pipeThrough(cs);
+        const compressed = await new Response(stream).arrayBuffer();
+        return new Uint8Array(compressed);
+      }
+    } catch {}
+    return bytes;
+  }
+  
   // Step 1: Encapsulate shared secret using Kyber-768
   const encapsResult = await (kyberEncaps as any)(publicKeyB64u);
   if (encapsResult.error) throw new Error(encapsResult.error);
@@ -61,8 +78,11 @@ export async function encryptDocumentData(data: string, publicKeyB64u: string): 
   
   const aesKey = kdfResult.key_b64u;
   
-  // Step 3: Encrypt data with AES-256-GCM
-  const dekB64u = b64uEncode(new TextEncoder().encode(data));
+  // Step 3: Optional compression, then encrypt data with AES-256-GCM
+  const rawBytes = new TextEncoder().encode(data);
+  const compressedBytes = await gzipCompress(rawBytes);
+  const usedCompression = compressedBytes !== undefined && compressedBytes.length < rawBytes.length ? 'gzip' : 'none';
+  const dekB64u = b64uEncode(usedCompression === 'gzip' ? compressedBytes : rawBytes);
   const aadB64u = b64uEncode(new TextEncoder().encode('veritas-documents'));
   
   const aesResult = await (aesGcmWrap as any)(aesKey, dekB64u, aadB64u);
@@ -74,7 +94,8 @@ export async function encryptDocumentData(data: string, publicKeyB64u: string): 
     algorithm: 'kyber768-aes256gcm',
     kem_ct: kemCt,
     iv: aesResult.iv_b64u,
-    ciphertext: aesResult.ct_b64u
+    ciphertext: aesResult.ct_b64u,
+    compression: usedCompression
   });
 }
 
@@ -103,8 +124,28 @@ export async function decryptDocumentData(encryptedData: string, privateKeyB64u:
   const aesResult = await (aesGcmUnwrap as any)(aesKey, encData.iv, encData.ciphertext, aadB64u);
   if (aesResult.error) throw new Error(aesResult.error);
   
-  // Decode decrypted data
-  return new TextDecoder().decode(b64uDecode(aesResult.dek_b64u));
+  // Optional decompression after decryption
+  async function gzipDecompress(bytes: Uint8Array): Promise<Uint8Array> {
+    try {
+      // @ts-ignore - DecompressionStream is a browser API
+      if (typeof (window as any).DecompressionStream === 'function') {
+        // @ts-ignore
+        const ds = new (window as any).DecompressionStream('gzip');
+        const body = new Response(bytes as any).body as ReadableStream<Uint8Array>;
+        const stream = body.pipeThrough(ds);
+        const decompressed = await new Response(stream).arrayBuffer();
+        return new Uint8Array(decompressed);
+      }
+    } catch {}
+    return bytes;
+  }
+  
+  const decryptedBytes = b64uDecode(aesResult.dek_b64u);
+  const needsDecompress = encData && encData.compression === 'gzip';
+  const outputBytes = needsDecompress ? await gzipDecompress(decryptedBytes) : decryptedBytes;
+  
+  // Decode to string
+  return new TextDecoder().decode(outputBytes);
 }
 
 // Generate client-side keypair (both Kyber for encryption and Dilithium for signing)

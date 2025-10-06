@@ -160,7 +160,6 @@ app.post('/api/stripe/webhook', async (c) => {
           tokenId: asset.tokenId,
           ipfsHash: asset.ipfsHash,
           ipfsMetadataHash: asset.ipfsMetadataHash,
-          documentR2Key: asset.storage?.documentR2Key,
           createdAt: asset.createdAt
         };
 
@@ -1015,6 +1014,17 @@ class VeritasApp {
     this.privateKeys = { kyber: null, dilithium: null };
     this.decryptedProfile = null;
     this.init();
+  }
+
+  // Basic HTML escaping helper for safe innerHTML usage
+  escapeHtml(str) {
+    if (str == null) return '';
+    return String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
   }
 
   copyToClipboard(text) {
@@ -1911,13 +1921,25 @@ class VeritasApp {
       // Ensure cryptography is ready
       await window.VeritasCrypto.ensureCryptoReady();
 
-      // Read file as text (JSON or text documents supported)
-      const documentData = await new Promise((resolve, reject) => {
+      // Read file as bytes to preserve binary; wrap into base64 JSON for encryption
+      const fileBuffer = await new Promise((resolve, reject) => {
         const reader = new FileReader();
-        reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : '');
+  reader.onload = () => resolve(reader.result);
         reader.onerror = () => reject(new Error('Failed to read file'));
-        reader.readAsText(file);
+        reader.readAsArrayBuffer(file);
       });
+      const bytes = new Uint8Array(fileBuffer);
+      const base64 = (() => {
+        let binary = '';
+        const len = bytes.length;
+        for (let i = 0; i < len; i++) {
+          binary += String.fromCharCode(bytes[i]);
+        }
+        return btoa(binary);
+      })();
+      const contentType = file.type || 'application/octet-stream';
+      const filename = file.name || 'document';
+      const documentData = JSON.stringify({ version:'1.0', contentType, filename, encoding:'base64', data: base64 });
 
       // Encrypt document client-side with user's Kyber public key
       const kyberPublicKey = this.currentUser.publicKey || this.currentUser.kyberPublicKey;
@@ -1964,6 +1986,8 @@ class VeritasApp {
           description,
           documentType,
           documentData: encryptedData,
+          contentType,
+          filename,
           isPubliclySearchable,
           signature,
           signaturePayload,
@@ -2061,7 +2085,7 @@ class VeritasApp {
       '      <button id="admin-invite-email-btn" class="btn">Compose Email</button>',
       '    </div>',
       '  </section>',
-      '  <section class="card" style="margin: 1rem 0;">',
+  '  <section class="card" style="margin: 1rem 0;">',
       '    <h3 class="card-title">Blockchain Maintenance</h3>',
       '    <div style="display: flex; gap: 0.75rem; flex-wrap: wrap;">',
   '      <button id="run-maintenance-btn" class="btn btn-primary">',
@@ -2085,6 +2109,19 @@ class VeritasApp {
       '    <div id="rebuild-index-result" style="margin-top: 0.75rem; display: none;"></div>',
       '    <div id="maintenance-logs" style="margin-top: 0.75rem; display: none;"></div>',
       '  </section>',
+  '  <section class="card" style="margin: 1rem 0;">',
+  '    <h3 class="card-title">IPFS Gateway Tools</h3>',
+  '    <div class="grid" style="grid-template-columns: 1fr auto; gap: 0.75rem; align-items: end;">',
+  '      <div class="form-group">',
+  '        <label class="label" for="ipfs-warm-cid">IPFS CID</label>',
+  '        <input type="text" id="ipfs-warm-cid" class="input" placeholder="bafy... or Qm..." />',
+  '      </div>',
+  '      <div>',
+  '        <button id="ipfs-warm-cloudflare" class="btn">Warm Cloudflare</button>',
+  '      </div>',
+  '    </div>',
+  '    <div id="ipfs-warm-status" style="margin-top: 0.5rem; display: none;"></div>',
+  '  </section>',
       '  <div id="admin-content">',
       '    <div class="loading"><div class="spinner"></div><p>Loading pending transactions...</p></div>',
       '  </div>',
@@ -2189,6 +2226,54 @@ class VeritasApp {
     }
 
     // Wire rebuild index button
+    // Wire IPFS warm Cloudflare tool
+    const warmBtn = document.getElementById('ipfs-warm-cloudflare');
+    const warmCid = document.getElementById('ipfs-warm-cid');
+    const warmStatus = document.getElementById('ipfs-warm-status');
+    if (warmBtn) {
+      warmBtn.addEventListener('click', async () => {
+        try {
+          const cid = (warmCid && warmCid.value) ? warmCid.value.trim() : '';
+          if (!cid) {
+            if (warmStatus) { warmStatus.style.display = 'block'; warmStatus.className = 'alert alert-error'; warmStatus.textContent = 'Enter a valid IPFS CID.'; }
+            return;
+          }
+          if (!this.sessionToken) throw new Error('Session expired. Please log in again.');
+          warmBtn.setAttribute('disabled','true');
+          if (warmStatus) { warmStatus.style.display = 'block'; warmStatus.className = ''; warmStatus.innerHTML = '<div class="loading"><div class="spinner"></div><p>Warming Cloudflare gateway…</p></div>'; }
+          const resp = await fetch('/api/vdc/ipfs/warm', {
+            method: 'POST',
+            headers: { 'Authorization': 'Bearer ' + this.sessionToken, 'Content-Type': 'application/json', 'x-admin-secret': '' },
+            body: JSON.stringify({ hash: cid, timeoutMs: 8000, retries: 4, backoffMs: 1200, primeWithPinata: true })
+          });
+          const data = await resp.json();
+          if (!data.success) throw new Error(data.error || 'Warm failed');
+          const ok = data.data && data.data.cloudflareWarmed;
+          const attempts = (data.data && Array.isArray(data.data.attempts)) ? data.data.attempts : [];
+          const primed = !!(data.data && data.data.primedPinata);
+          if (warmStatus) {
+            warmStatus.style.display = 'block';
+            warmStatus.className = ok ? 'alert alert-success' : 'alert alert-warning';
+            // Use String.fromCharCode(10) to avoid accidental literal newlines breaking the JS string
+            const details = attempts
+              .map(function(a){
+                const method = a.method ? (a.method + ' ') : '';
+                return '• ' + (a.ok ? '[OK]' : '[MISS]') + ' ' + (a.status ? '(' + a.status + ')' : '') + ' ' + method + a.url;
+              })
+              .join(String.fromCharCode(10));
+            warmStatus.innerHTML = [
+              ok ? 'Cloudflare gateway responded OK for this CID.' : 'Requested; Cloudflare did not respond OK yet. Try again shortly.',
+              primed ? '<div style="margin-top:0.5rem;color:#1d4ed8;">Primed via Pinata.</div>' : '',
+              attempts.length ? '<pre style="margin-top:0.5rem;white-space:pre-wrap;">' + this.escapeHtml(details) + '</pre>' : ''
+            ].join('');
+          }
+        } catch (err) {
+          if (warmStatus) { warmStatus.style.display = 'block'; warmStatus.className = 'alert alert-error'; warmStatus.textContent = (err && err.message) ? err.message : String(err); }
+        } finally {
+          warmBtn.removeAttribute('disabled');
+        }
+      });
+    }
     const rebuildBtn = document.getElementById('rebuild-index-btn');
     const rebuildResult = document.getElementById('rebuild-index-result');
     
@@ -2683,7 +2768,16 @@ class VeritasApp {
         // Sort by creation date, newest first
         allAssets.sort((a, b) => b.createdAt - a.createdAt);
         
-        container.innerHTML = allAssets.map(asset => '<div class="asset-card"><div class="asset-type">' + (asset.documentType || 'unknown') + '</div><div class="asset-title">' + asset.title + '</div><div class="asset-description">' + (asset.description || '') + '</div><div class="asset-meta"><span>Token: ' + asset.tokenId + '</span><span>' + new Date(asset.createdAt).toLocaleDateString() + '</span><span class="badge ' + (asset.status === 'confirmed' ? 'badge-success' : 'badge-warning') + '">' + (asset.status || asset.paymentStatus) + '</span></div><div class="asset-actions" style="margin-top: 1rem; display: flex; gap: 0.5rem;"><button class="btn btn-secondary btn-sm" onclick="app.decryptAsset(\\'' + asset.id + '\\')">🔓 Decrypt</button><button class="btn btn-secondary btn-sm" onclick="app.downloadAsset(\\'' + asset.id + '\\')">💾 Download</button></div></div>').join('');
+        // Render compact list: single row per asset with View action
+        container.innerHTML = '<div class="asset-list">' + allAssets.map(asset => (
+          '<div class="asset-row" style="display:flex;align-items:center;gap:1rem;padding:0.75rem 0;border-bottom:1px solid #e5e7eb;">' +
+            '<div style="flex:2;min-width:200px;"><strong>' + this.escapeHtml(asset.title) + '</strong><div class="text-muted" style="font-size:12px;">' + this.escapeHtml(asset.documentType || 'unknown') + '</div></div>' +
+            '<div style="flex:2;min-width:240px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="' + this.escapeHtml(asset.description || '') + '">' + this.escapeHtml(asset.description || '') + '</div>' +
+            '<div style="flex:1;min-width:120px;">' + new Date(asset.createdAt).toLocaleDateString() + '</div>' +
+            '<div style="flex:1;min-width:120px;"><span class="badge ' + (asset.status === 'confirmed' ? 'badge-success' : 'badge-warning') + '">' + (asset.status || asset.paymentStatus) + '</span></div>' +
+            '<div style="flex:0;white-space:nowrap;"><button class="btn btn-secondary btn-sm" onclick="app.viewAsset(\\'' + asset.id + '\\')">View</button></div>' +
+          '</div>'
+        )).join('') + '</div>';
         
         document.getElementById('owned-count').textContent = result.data.confirmed?.length || 0;
         document.getElementById('created-count').textContent = allAssets.length;
@@ -2695,6 +2789,175 @@ class VeritasApp {
     } catch (error) {
       console.error('Failed to load assets:', error);
       document.getElementById('user-assets').innerHTML = '<div class="alert alert-error">Failed to load assets</div>';
+    }
+  }
+
+  async viewAsset(assetId) {
+    try {
+      // Fetch asset details (verification and IDs)
+      const resp = await fetch('/api/web3-assets/web3/' + assetId);
+      const result = await resp.json();
+      if (!result.success) { this.showAlert('error', result.error || 'Failed to load asset'); return; }
+      const asset = result.data.asset;
+      const ver = result.data.verifications || {};
+
+      const body = [
+        '<div class="asset-detail">',
+        '<div style="margin-bottom:0.75rem"><strong>Title:</strong> ' + this.escapeHtml(asset.title || '') + '</div>',
+        '<div style="margin-bottom:0.75rem"><strong>Description:</strong> ' + this.escapeHtml(asset.description || '') + '</div>',
+        '<div style="display:grid;grid-template-columns:160px 1fr;gap:0.5rem;align-items:start">',
+        '<div><strong>Asset ID</strong></div><div>' + this.escapeHtml(asset.id) + '</div>',
+        '<div><strong>Token ID</strong></div><div>' + this.escapeHtml(asset.tokenId || '') + '</div>',
+        '<div><strong>Type</strong></div><div>' + this.escapeHtml(asset.documentType || 'unknown') + '</div>',
+        '<div><strong>Created</strong></div><div>' + new Date(asset.createdAt).toLocaleString() + '</div>',
+        asset.blockNumber ? ('<div><strong>VDC Block</strong></div><div>' + asset.blockNumber + '</div>') : '',
+        asset.ethereumTxHash ? ('<div><strong>Ethereum tx</strong></div><div><a href="#" target="_blank">' + this.escapeHtml(asset.ethereumTxHash) + '</a></div>') : '',
+        asset.ipfsHash ? (
+          '<div><strong>IPFS</strong></div><div>' +
+          (asset.ipfsGatewayUrlPinata ? ('<a class="btn btn-link btn-sm" href="' + this.escapeHtml(asset.ipfsGatewayUrlPinata) + '" target="_blank">Open via Pinata</a>') : '') +
+          (asset.ipfsGatewayUrlCloudflare ? ('<a class="btn btn-link btn-sm" href="' + this.escapeHtml(asset.ipfsGatewayUrlCloudflare) + '" target="_blank" style="margin-left:0.5rem;">Open via Cloudflare</a>') : '') +
+          (asset.ipfsGatewayUrlPinata || asset.ipfsGatewayUrlCloudflare ? '' : ('<span class="text-muted">No gateway URL available</span>')) +
+          '<div style="font-size:12px;color:#6b7280;word-break:break-all;">' + this.escapeHtml(asset.ipfsHash) + '</div>' +
+          '</div>'
+        ) : '',
+        asset.ipfsMetadataHash ? (
+          '<div><strong>Metadata</strong></div><div>' +
+          (asset.metadataGatewayUrlPinata ? ('<a class="btn btn-link btn-sm" href="' + this.escapeHtml(asset.metadataGatewayUrlPinata) + '" target="_blank">Open via Pinata</a>') : '') +
+          (asset.metadataGatewayUrlCloudflare ? ('<a class="btn btn-link btn-sm" href="' + this.escapeHtml(asset.metadataGatewayUrlCloudflare) + '" target="_blank" style="margin-left:0.5rem;">Open via Cloudflare</a>') : '') +
+          (asset.metadataGatewayUrlPinata || asset.metadataGatewayUrlCloudflare ? '' : ('<span class="text-muted">No gateway URL available</span>')) +
+          '<div style="font-size:12px;color:#6b7280;word-break:break-all;">' + this.escapeHtml(asset.ipfsMetadataHash) + '</div>' +
+          '</div>'
+        ) : '',
+        '</div>',
+        '<div style="margin-top:1rem;display:flex;gap:0.5rem;align-items:center">',
+        '<button class="btn btn-primary btn-sm" id="btn-decrypt-doc">Decrypt & View</button>',
+        '<a class="btn btn-secondary btn-sm" id="btn-download-encrypted" href="#">Download (encrypted)</a>',
+        '</div>',
+        '<div id="asset-viewer" style="margin-top:1rem;max-height:60vh;overflow:auto;border:1px solid #e5e7eb;border-radius:6px;padding:0.75rem;display:none"></div>',
+        '</div>'
+      ].join('');
+
+      this.showModal('Asset: ' + (asset.title || asset.id), body);
+
+      // Wire up buttons
+      const dlBtn = document.getElementById('btn-download-encrypted');
+      if (dlBtn) {
+        dlBtn.addEventListener('click', async (e) => {
+          e.preventDefault();
+          const enc = await this.fetchEncryptedAsset(asset.id);
+          if (!enc) return;
+          const blob = new Blob([enc], { type: 'application/json' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url; a.download = asset.id + '.encrypted.json'; a.click();
+          URL.revokeObjectURL(url);
+        });
+      }
+
+      const decBtn = document.getElementById('btn-decrypt-doc');
+      if (decBtn) {
+        decBtn.addEventListener('click', async () => {
+          try {
+            await window.VeritasCrypto.ensureCryptoReady();
+            const kyberPriv = this.privateKeys && this.privateKeys.kyber;
+            if (!kyberPriv) { this.showAlert('error', 'Kyber private key missing. Please re-login.'); return; }
+            const enc = await this.fetchEncryptedAsset(asset.id);
+            if (!enc) return;
+            const plaintext = await window.VeritasCrypto.decryptDocumentData(enc, kyberPriv);
+            // Try to render nicely by detecting our base64-wrapped envelope
+            let viewer = document.getElementById('asset-viewer');
+            if (!viewer) return;
+            viewer.style.display = 'block';
+            // Helper to decode base64 to Uint8Array
+            const base64ToBytes = (b64) => {
+              const bin = atob(b64);
+              const len = bin.length;
+              const arr = new Uint8Array(len);
+              for (let i = 0; i < len; i++) arr[i] = bin.charCodeAt(i);
+              return arr;
+            };
+            let envelope = null;
+            try { envelope = JSON.parse(plaintext); } catch {}
+
+            if (envelope && typeof envelope === 'object' && envelope.encoding === 'base64' && typeof envelope.data === 'string') {
+              const mime = envelope.contentType || 'application/octet-stream';
+              const name = envelope.filename || (asset.title || asset.id);
+              const bytes = base64ToBytes(envelope.data);
+              const blob = new Blob([bytes], { type: mime });
+              const url = URL.createObjectURL(blob);
+
+              // Render by MIME type
+              if (mime.startsWith('image/')) {
+                viewer.innerHTML = '<img src="' + url + '" alt="' + this.escapeHtml(name) + '" style="max-width:100%;height:auto;display:block;margin:0 auto;" />';
+              } else if (mime === 'application/pdf') {
+                viewer.innerHTML = '<iframe src="' + url + '" style="width:100%;height:60vh;border:none;"></iframe>';
+              } else if (mime.startsWith('text/') || mime === 'application/json') {
+                try {
+                  const text = new TextDecoder().decode(bytes);
+                  let pretty = text;
+                  if (mime === 'application/json') {
+                    try { pretty = JSON.stringify(JSON.parse(text), null, 2); } catch {}
+                  }
+                  viewer.innerHTML = '<pre style="white-space:pre-wrap;word-break:break-word;">' + this.escapeHtml(pretty) + '</pre>';
+                } catch {
+                  viewer.innerHTML = '<pre style="white-space:pre-wrap;word-break:break-word;">[Unable to display text]</pre>';
+                }
+              } else {
+                viewer.innerHTML = '<div class="text-muted">Preview not available for this file type (' + this.escapeHtml(mime) + '). Use download instead.</div>';
+              }
+
+              // Add download (decrypted) using original filename
+              const dl = document.createElement('a');
+              dl.textContent = 'Download (decrypted)';
+              dl.className = 'btn btn-secondary btn-sm';
+              dl.style.marginLeft = '0.5rem';
+              dl.href = url; dl.download = name;
+              const actions = (document.getElementById('btn-download-encrypted') || decBtn).parentElement;
+              if (actions && !actions.querySelector('.download-decrypted')) {
+                dl.classList.add('download-decrypted');
+                actions.appendChild(dl);
+              }
+            } else {
+              // Fallback: show plaintext as JSON/text
+              try {
+                const obj = JSON.parse(plaintext);
+                viewer.innerHTML = '<pre style="white-space:pre-wrap;word-break:break-word;">' + this.escapeHtml(JSON.stringify(obj, null, 2)) + '</pre>';
+              } catch {
+                viewer.innerHTML = '<pre style="white-space:pre-wrap;word-break:break-word;">' + this.escapeHtml(plaintext) + '</pre>';  
+              }
+              // Plaintext download fallback
+              const dl = document.createElement('a');
+              dl.textContent = 'Download (decrypted)';
+              dl.className = 'btn btn-secondary btn-sm';
+              dl.style.marginLeft = '0.5rem';
+              const blob = new Blob([plaintext], { type: 'text/plain' });
+              const url = URL.createObjectURL(blob);
+              dl.href = url; dl.download = (asset.title || asset.id) + '.txt';
+              const actions = (document.getElementById('btn-download-encrypted') || decBtn).parentElement;
+              if (actions && !actions.querySelector('.download-decrypted')) {
+                dl.classList.add('download-decrypted');
+                actions.appendChild(dl);
+              }
+            }
+          } catch (e) {
+            this.showAlert('error', (e && e.message) ? e.message : 'Failed to decrypt document');
+          }
+        });
+      }
+    } catch (e) {
+      this.showAlert('error', (e && e.message) ? e.message : 'Failed to load asset');
+    }
+  }
+
+  async fetchEncryptedAsset(assetId) {
+    try {
+      const resp = await fetch('/api/web3-assets/web3/' + assetId + '/encrypted');
+      const json = await resp.json();
+      if (!json.success) { this.showAlert('error', json.error || 'Failed to retrieve encrypted document'); return null; }
+      return json.data && json.data.encryptedData;
+    } catch (e) {
+      this.showAlert('error', (e && e.message) ? e.message : 'Failed to retrieve encrypted document');
+      return null;
     }
   }
 

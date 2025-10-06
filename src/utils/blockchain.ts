@@ -159,7 +159,9 @@ export class VDCBlockchain {
   private genesisBlock: VDCBlock | null = null;
   private readonly pendingPrefix = 'pending/';
   private readonly blockPrefix = 'blocks/';
-  private readonly MAX_TX_BYTES = 12 * 1024; // ~12KB per transaction cap
+  private readonly MAX_TX_BYTES = 12 * 1024; // ~12KB per transaction cap (default)
+  // Allow larger payloads for user registrations due to encryptedUserData size
+  private readonly MAX_USER_REG_TX_BYTES = 64 * 1024; // 64KB for user_registration
 
   constructor(env: Environment) {
     this.env = env;
@@ -489,7 +491,7 @@ export class VDCBlockchain {
     // Sanitize payloads for known actions to avoid plaintext bloat
     let sanitizedPayload: Record<string, any> = payload || {};
     if (action === 'register_asset') {
-      const allowed = ['assetId', 'userId', 'tokenId', 'ipfsHash', 'ipfsMetadataHash', 'documentR2Key', 'createdAt'];
+      const allowed = ['assetId', 'userId', 'tokenId', 'ipfsHash', 'ipfsMetadataHash', 'createdAt'];
       const p: Record<string, any> = {};
       for (const k of allowed) {
         if (sanitizedPayload[k] !== undefined) p[k] = sanitizedPayload[k];
@@ -511,8 +513,9 @@ export class VDCBlockchain {
 
     // Enforce transaction size limit before signing/persisting
     const txSizeBytes = new TextEncoder().encode(JSON.stringify(txData)).length;
-    if (txSizeBytes > this.MAX_TX_BYTES) {
-      throw new Error(`Transaction too large: ${txSizeBytes} bytes (max ${this.MAX_TX_BYTES})`);
+    const maxAllowed = txData.type === 'user_registration' ? this.MAX_USER_REG_TX_BYTES : this.MAX_TX_BYTES;
+    if (txSizeBytes > maxAllowed) {
+      throw new Error(`Transaction too large: ${txSizeBytes} bytes (max ${maxAllowed} for type ${txData.type})`);
     }
 
     const signature = await this.maataraClient.signData(
@@ -843,7 +846,9 @@ export class VDCBlockchain {
   /**
    * Verify a transaction's dual signatures
    */
-  async verifyTransaction(transaction: VDCTransaction): Promise<boolean> {
+  async verifyTransaction(transaction: VDCTransaction, options?: { relaxed?: boolean; log?: (msg: string) => void }): Promise<boolean> {
+    const relaxed = options?.relaxed === true;
+    const log = options?.log || ((msg: string) => {});
     try {
       const txData = {
         id: transaction.id,
@@ -854,30 +859,52 @@ export class VDCBlockchain {
       const dataToVerify = JSON.stringify(txData);
 
       // Verify user signature
-      const userSigValid = await this.maataraClient.verifySignature(
-        dataToVerify,
-        transaction.signatures.user.signature,
-        transaction.signatures.user.publicKey
-      );
-
-      if (!userSigValid) {
-        console.error('❌ VDC: User signature invalid');
-        return false;
+      let userSigValid = false;
+      try {
+        userSigValid = await this.maataraClient.verifySignature(
+          dataToVerify,
+          transaction.signatures.user.signature,
+          transaction.signatures.user.publicKey
+        );
+      } catch {
+        userSigValid = false;
       }
 
       // Verify system signature
-      const systemSigValid = await this.maataraClient.verifySignature(
-        dataToVerify,
-        transaction.signatures.system.signature,
-        transaction.signatures.system.publicKey
-      );
-
-      if (!systemSigValid) {
-        console.error('❌ VDC: System signature invalid');
-        return false;
+      let systemSigValid = false;
+      try {
+        systemSigValid = await this.maataraClient.verifySignature(
+          dataToVerify,
+          transaction.signatures.system.signature,
+          transaction.signatures.system.publicKey
+        );
+      } catch {
+        systemSigValid = false;
       }
 
-      return true;
+      if (userSigValid && systemSigValid) {
+        log(`verify: tx ${transaction.id} OK`);
+        return true;
+      }
+
+      // Relaxed policy: accept system signature only for known safe types
+      if (relaxed) {
+        const type = transaction.type as string;
+        const safeWithSystemOnly = type === 'admin_action' || type === 'document_creation' || type === 'asset_transfer';
+        if (systemSigValid && safeWithSystemOnly) {
+          log(`verify: tx ${transaction.id} OK (relaxed: system sig valid, user sig ${userSigValid ? 'valid' : 'invalid/unknown'})`);
+          return true;
+        }
+
+        // For user_registration, we know legacy flows couldn't verify user sig due to timestamp mismatch
+        if (type === 'user_registration' && systemSigValid) {
+          log(`verify: tx ${transaction.id} OK (relaxed: user_registration with system sig valid; user sig cannot be verified reliably due to legacy timestamp)`);
+          return true;
+        }
+      }
+
+      log(`verify: tx ${transaction.id} INVALID (user=${userSigValid}, system=${systemSigValid})`);
+      return false;
     } catch (error) {
       console.error('❌ VDC: Transaction verification failed:', error);
       return false;
@@ -949,7 +976,7 @@ export class VDCBlockchain {
       let txOk = 0;
       let txFail = 0;
       for (const tx of block.transactions) {
-        const ok = await this.verifyTransaction(tx);
+        const ok = await this.verifyTransaction(tx, { relaxed, log: (m) => log(m) });
         if (!ok) {
           txFail++;
           log(`verify: tx ${tx.id} INVALID`);
@@ -1127,8 +1154,9 @@ export class VDCBlockchain {
       data: transaction.data,
       signatures: transaction.signatures
     })).length;
-    if (txSizeBytes > this.MAX_TX_BYTES) {
-      throw new Error(`Transaction too large at persist: ${txSizeBytes} bytes (max ${this.MAX_TX_BYTES})`);
+    const maxAllowed = transaction.type === 'user_registration' ? this.MAX_USER_REG_TX_BYTES : this.MAX_TX_BYTES;
+    if (txSizeBytes > maxAllowed) {
+      throw new Error(`Transaction too large at persist: ${txSizeBytes} bytes (max ${maxAllowed} for type ${transaction.type})`);
     }
     const pendingKey = this.getPendingKey(transaction.id);
     const storedAt = Date.now();

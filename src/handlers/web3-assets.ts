@@ -22,6 +22,8 @@ enhancedAssetHandler.post('/create-web3', async (c) => {
       description,
       documentType,
       documentData,
+      contentType,
+      filename,
       isPubliclySearchable,
       publicMetadata,
       signature,        // Client-side signature
@@ -147,6 +149,13 @@ enhancedAssetHandler.post('/create-web3', async (c) => {
     }
 
     if (!encryptedData) {
+      // Optional strict mode: require client-side encryption to preserve exact bits
+      if ((env as any)?.REQUIRE_CLIENT_ENCRYPTION === 'true') {
+        return c.json<APIResponse>({
+          success: false,
+          error: 'Client-side encryption required. Please ensure the document is encrypted with Kyber before upload.'
+        }, 400);
+      }
       encryptionSource = 'server';
       const payloadToEncrypt = plaintextPayload ?? documentData;
       encryptedData = await maataraClient.encryptData(payloadToEncrypt, userKyberPublicKey);
@@ -166,20 +175,24 @@ enhancedAssetHandler.post('/create-web3', async (c) => {
   const documentBuffer = new TextEncoder().encode(encryptedData);
     const documentSize = documentBuffer.length;
 
-    // 2. Upload encrypted data to IPFS via Cloudflare (skip if Pinata not configured)
-    let ipfsRecord: IPFSRecord;
+    // 2. Upload encrypted data to IPFS via Pinata if configured; do not fail asset creation if IPFS is unavailable
+    let ipfsRecord: IPFSRecord | null = null;
     try {
       ipfsRecord = await createIPFSRecord(
         ipfsClient,
         encryptedData,
         'application/json'
       );
-    } catch (ipfsError) {
-      console.error('IPFS upload failed:', ipfsError);
-      return c.json<APIResponse>({ success: false, error: 'IPFS upload failed' }, 500);
+      // Attempt to warm Cloudflare gateway so public link is available sooner
+      if (ipfsRecord?.hash) {
+        // Slightly longer warm time just after upload to allow propagation
+        ipfsClient.warmGateway(ipfsRecord.hash, 'cloudflare', 8000).catch(() => {});
+      }
+    } catch (ipfsError: any) {
+      console.warn('IPFS upload skipped or failed, continuing with R2-only storage:', ipfsError?.message || ipfsError);
     }
 
-    // 3. Create asset metadata for blockchain anchoring
+    // 3. Create asset metadata for blockchain anchoring (store to IPFS if available)
     const assetMetadata = {
       id: assetId,
       title,
@@ -187,23 +200,29 @@ enhancedAssetHandler.post('/create-web3', async (c) => {
       documentType,
       ownerId: userId,
       creatorId: userId,
-      ipfsHash: ipfsRecord.hash,
+      ...(ipfsRecord?.hash ? { ipfsHash: ipfsRecord.hash } : {}),
       createdAt: Date.now(),
       isPubliclySearchable: isPubliclySearchable || false,
-      publicMetadata: publicMetadata || {}
+      publicMetadata: {
+        ...(publicMetadata || {}),
+        originalContentType: contentType || undefined,
+        originalFilename: filename || undefined
+      }
     };
 
-    // 4. Upload metadata to IPFS (skip if Pinata not configured)
-    let metadataRecord;
+    // 4. Upload metadata to IPFS if available; otherwise continue without
+    let metadataRecord: IPFSRecord | null = null;
     try {
       metadataRecord = await createIPFSRecord(
         ipfsClient,
         JSON.stringify(assetMetadata),
         'application/json'
       );
-    } catch (metadataError) {
-      console.error('IPFS metadata upload failed:', metadataError);
-      return c.json<APIResponse>({ success: false, error: 'IPFS metadata upload failed' }, 500);
+      if (metadataRecord?.hash) {
+        ipfsClient.warmGateway(metadataRecord.hash, 'cloudflare', 8000).catch(() => {});
+      }
+    } catch (metadataError: any) {
+      console.warn('IPFS metadata upload skipped or failed:', metadataError?.message || metadataError);
     }
 
     // 5. Store encrypted document in R2 for durable, low-latency retrieval
@@ -231,6 +250,8 @@ enhancedAssetHandler.post('/create-web3', async (c) => {
         assetId,
         userId,
         documentType: documentType || 'other',
+        document_content_type: contentType || '',
+        document_filename: filename || '',
         encryption_algorithm: storageEncryptionMetadata.algorithm,
         encryption_version: storageEncryptionMetadata.version,
         encryption_source: storageEncryptionMetadata.source,
@@ -242,9 +263,11 @@ enhancedAssetHandler.post('/create-web3', async (c) => {
       documentR2Key: documentKey,
       storedAt: documentStoredAt,
       size: documentSize,
-      ipfsHash: ipfsRecord.hash,
-      ipfsGatewayUrl: ipfsRecord.gatewayUrl || ipfsClient.getIPFSUrl(ipfsRecord.hash),
-      ipfsPinned: !!ipfsRecord.isPinned,
+      ...(ipfsRecord?.hash ? {
+        ipfsHash: ipfsRecord.hash,
+        ipfsGatewayUrl: ipfsRecord.gatewayUrl || ipfsClient.getIPFSUrl(ipfsRecord.hash),
+        ipfsPinned: !!ipfsRecord.isPinned,
+      } : {}),
       encryption: storageEncryptionMetadata
     } as Asset['storage'];
 
@@ -284,16 +307,16 @@ enhancedAssetHandler.post('/create-web3', async (c) => {
       title,
       description,
       documentType,
-      ipfsHash: ipfsRecord.hash,
+      ...(ipfsRecord?.hash ? { ipfsHash: ipfsRecord.hash } : {}),
       signature,
       createdAt: Date.now(),
       updatedAt: Date.now(),
       isPubliclySearchable: isPubliclySearchable || false,
-      publicMetadata: publicMetadata || {},
+      publicMetadata: assetMetadata.publicMetadata || {},
       // Web3 integration fields
       merkleRoot: ethereumAnchor.anchorHash,
       ethereumTxHash: ethereumAnchor.ethereumTxHash,
-      ipfsMetadataHash: metadataRecord.hash,
+      ...(metadataRecord?.hash ? { ipfsMetadataHash: metadataRecord.hash } : {}),
       storage: assetStorage
     };
 
@@ -367,8 +390,12 @@ enhancedAssetHandler.post('/create-web3', async (c) => {
           ipfsMetadataHash: asset.ipfsMetadataHash,
           merkleRoot: asset.merkleRoot,
           ethereumTxHash: asset.ethereumTxHash,
-          ipfsGatewayUrl: ipfsClient.getIPFSUrl(asset.ipfsHash),
-          metadataGatewayUrl: ipfsClient.getIPFSUrl(asset.ipfsMetadataHash!)
+          ipfsGatewayUrl: asset.ipfsHash ? (ipfsClient.getPinataIPFSUrl(asset.ipfsHash) || ipfsClient.getIPFSUrl(asset.ipfsHash)) : undefined,
+          ipfsGatewayUrlCloudflare: asset.ipfsHash ? ipfsClient.getIPFSUrl(asset.ipfsHash) : undefined,
+          ipfsGatewayUrlPinata: asset.ipfsHash ? (ipfsClient.getPinataIPFSUrl(asset.ipfsHash) || undefined) : undefined,
+          metadataGatewayUrl: asset.ipfsMetadataHash ? (ipfsClient.getPinataIPFSUrl(asset.ipfsMetadataHash) || ipfsClient.getIPFSUrl(asset.ipfsMetadataHash)) : undefined,
+          metadataGatewayUrlCloudflare: asset.ipfsMetadataHash ? ipfsClient.getIPFSUrl(asset.ipfsMetadataHash) : undefined,
+          metadataGatewayUrlPinata: asset.ipfsMetadataHash ? (ipfsClient.getPinataIPFSUrl(asset.ipfsMetadataHash) || undefined) : undefined
         },
         ethereumAnchor: {
           hash: ethereumAnchor.anchorHash,
@@ -418,10 +445,13 @@ enhancedAssetHandler.get('/web3/:assetId', async (c) => {
 
     try {
       // Check if IPFS content is accessible
-      await ipfsClient.retrieveFromIPFS(asset.ipfsHash);
-      verifications.ipfsAccessible = true;
+      const contentHash = asset.ipfsHash || asset.storage?.ipfsHash;
+      if (contentHash) {
+        await ipfsClient.retrieveFromIPFS(contentHash);
+        verifications.ipfsAccessible = true;
+      }
     } catch (error) {
-      console.warn(`IPFS content not accessible: ${asset.ipfsHash}`);
+      console.warn(`IPFS content not accessible: ${asset.ipfsHash || asset.storage?.ipfsHash}`);
     }
 
     try {
@@ -458,15 +488,23 @@ enhancedAssetHandler.get('/web3/:assetId', async (c) => {
           creatorId: asset.creatorId,
           isPubliclySearchable: asset.isPubliclySearchable,
           publicMetadata: asset.publicMetadata,
+          originalContentType: asset.publicMetadata?.originalContentType,
+          originalFilename: asset.publicMetadata?.originalFilename,
           // Web3 fields
           ipfsHash: asset.ipfsHash,
           ipfsMetadataHash: asset.ipfsMetadataHash,
           merkleRoot: asset.merkleRoot,
           ethereumTxHash: asset.ethereumTxHash,
           blockNumber: asset.blockNumber,
-          // Gateway URLs
-          ipfsGatewayUrl: ipfsClient.getIPFSUrl(asset.ipfsHash),
-          metadataGatewayUrl: asset.ipfsMetadataHash ? ipfsClient.getIPFSUrl(asset.ipfsMetadataHash) : null
+          // Gateway URLs (prefer Pinata, include both for UI toggle)
+          ipfsGatewayUrl: (asset.ipfsHash
+            ? (ipfsClient.getPinataIPFSUrl(asset.ipfsHash) || ipfsClient.getIPFSUrl(asset.ipfsHash))
+            : (asset.storage?.ipfsHash ? (ipfsClient.getPinataIPFSUrl(asset.storage.ipfsHash) || ipfsClient.getIPFSUrl(asset.storage.ipfsHash)) : null)),
+          ipfsGatewayUrlCloudflare: (asset.ipfsHash || asset.storage?.ipfsHash) ? ipfsClient.getIPFSUrl(asset.ipfsHash || asset.storage!.ipfsHash!) : null,
+          ipfsGatewayUrlPinata: (asset.ipfsHash || asset.storage?.ipfsHash) ? (ipfsClient.getPinataIPFSUrl(asset.ipfsHash || asset.storage!.ipfsHash!) || null) : null,
+          metadataGatewayUrl: asset.ipfsMetadataHash ? (ipfsClient.getPinataIPFSUrl(asset.ipfsMetadataHash) || ipfsClient.getIPFSUrl(asset.ipfsMetadataHash)) : null,
+          metadataGatewayUrlCloudflare: asset.ipfsMetadataHash ? ipfsClient.getIPFSUrl(asset.ipfsMetadataHash) : null,
+          metadataGatewayUrlPinata: asset.ipfsMetadataHash ? (ipfsClient.getPinataIPFSUrl(asset.ipfsMetadataHash) || null) : null
         },
         verifications
       }
@@ -522,7 +560,10 @@ enhancedAssetHandler.post('/web3/:assetId/decrypt', async (c) => {
     }
 
     if (!encryptedData) {
-      encryptedData = await ipfsClient.retrieveFromIPFS(asset.ipfsHash);
+      const contentHash = asset.ipfsHash || asset.storage?.ipfsHash;
+      if (contentHash) {
+        encryptedData = await ipfsClient.retrieveFromIPFS(contentHash);
+      }
     }
 
     if (!encryptedData) {
@@ -556,6 +597,56 @@ enhancedAssetHandler.post('/web3/:assetId/decrypt', async (c) => {
       success: false, 
       error: `Failed to decrypt document: ${error instanceof Error ? error.message : 'Unknown error'}` 
     }, 500);
+  }
+});
+
+// Retrieve encrypted document content (no decryption, zero-knowledge)
+enhancedAssetHandler.get('/web3/:assetId/encrypted', async (c) => {
+  try {
+    const env = c.env;
+    const assetId = c.req.param('assetId');
+
+    // Get asset from KV
+    const assetData = await env.VERITAS_KV.get(`asset:${assetId}`);
+    if (!assetData) {
+      return c.json<APIResponse>({ success: false, error: 'Asset not found' }, 404);
+    }
+
+    const asset: Asset = JSON.parse(assetData);
+
+    // Prefer R2; fallback to IPFS
+    let encryptedData: string | null = null;
+    let source: 'r2' | 'ipfs' = 'r2';
+
+    if (asset.storage?.documentR2Key && env.VDC_STORAGE) {
+      try {
+        const r2Object = await env.VDC_STORAGE.get(asset.storage.documentR2Key);
+        if (r2Object) {
+          encryptedData = await r2Object.text();
+          source = 'r2';
+        }
+      } catch (error) {
+        console.warn(`Failed to fetch encrypted document from R2 for asset ${asset.id}`, error);
+      }
+    }
+
+    if (!encryptedData) {
+      const ipfsClient = new IPFSClient(env);
+      const contentHash = asset.ipfsHash || asset.storage?.ipfsHash;
+      if (contentHash) {
+        encryptedData = await ipfsClient.retrieveFromIPFS(contentHash);
+        source = 'ipfs';
+      }
+    }
+
+    if (!encryptedData) {
+      return c.json<APIResponse>({ success: false, error: 'Encrypted document could not be retrieved' }, 500);
+    }
+
+    return c.json<APIResponse>({ success: true, data: { encryptedData, source } });
+  } catch (error) {
+    console.error('Encrypted document retrieval error:', error);
+    return c.json<APIResponse>({ success: false, error: 'Failed to retrieve encrypted document' }, 500);
   }
 });
 

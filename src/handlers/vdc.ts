@@ -127,6 +127,42 @@ vdcHandler.post('/initialize-genesis', async (c) => {
   }
 });
 
+  // Admin: warm Cloudflare IPFS gateway for a hash (non-fatal best-effort)
+vdcHandler.post('/ipfs/warm', async (c) => {
+    try {
+      // Accept either session-based admin auth or admin secret header
+      let isAdmin = false;
+      const user = await authenticateUser(c);
+      if (user && user.accountType === 'admin') {
+        isAdmin = true;
+      } else {
+        const adminSecret = extractAdminSecret(c.req.header('x-admin-secret'), null);
+        const authError = ensureAdminAccess(c, adminSecret);
+        if (!authError) {
+          isAdmin = true;
+        }
+      }
+
+      if (!isAdmin) {
+        return c.json({ success: false, error: 'Admin access required' }, 403);
+      }
+
+      const env = c.env as Environment;
+      const { hash, timeoutMs, retries, backoffMs, primeWithPinata } = await c.req.json();
+      if (!hash || typeof hash !== 'string') return c.json({ success: false, error: 'hash required' }, 400);
+
+      const ipfs = new (await import('../utils/ipfs')).IPFSClient(env);
+      const result = await ipfs.warmCloudflareRobust(hash, {
+        timeoutMs: Math.max(1000, Math.min(15000, timeoutMs || 5000)),
+        retries: retries ?? 3,
+        backoffMs: backoffMs ?? 750,
+        primeWithPinata: primeWithPinata ?? true
+      });
+      return c.json({ success: true, data: { hash, cloudflareWarmed: result.ok, primedPinata: result.primedPinata, attempts: result.attempts } });
+    } catch (e: any) {
+      return c.json({ success: false, error: e?.message || 'Failed to warm IPFS gateway' }, 500);
+    }
+  });
 // Admin endpoint: migrate all blocks missing storage/ipfs metadata
 vdcHandler.post('/migrate-missing-storage', async (c) => {
   let body: any = {};
@@ -789,8 +825,8 @@ vdcHandler.post('/maintenance/run', async (c) => {
         entry.steps.push(`block ${i}: verification ${relaxed ? 'OK (relaxed)' : 'OK'}`);
 
         // Repair missing/corrupted tiers by re-storing canonical block
-        const needKV = !kvBlockRaw || !(await vdc.verifyBlock(kvBlock, { relaxed }));
-        const needR2 = !r2Block || !(await vdc.verifyBlock(r2Block, { relaxed }));
+  const needKV = !kvBlockRaw || !(await vdc.verifyBlock(kvBlock, { relaxed, log: (m) => entry.steps.push(`block ${i}: ${m}`) }));
+  const needR2 = !r2Block || !(await vdc.verifyBlock(r2Block, { relaxed, log: (m) => entry.steps.push(`block ${i}: ${m}`) }));
         const needIPFS = !ipfsHash;
 
         if (needKV || needR2 || needIPFS) {

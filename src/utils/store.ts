@@ -164,7 +164,17 @@ export class StorageManager {
 
     // Store in IPFS if required
     if (policy.tiers.includes('ipfs') || policy.tiers.includes('all')) {
-      const ipfsResult = await this.storeInIPFS(payload, encryption);
+      // Derive a friendly pin name for Pinata based on key
+      let pinName: string | undefined;
+      if (key.startsWith('blocks/')) {
+        const part = key.split('/')[1] || '';
+        pinName = `veritas-block-${part.replace('.json', '')}`;
+      } else if (key.startsWith('documents/')) {
+        const part = key.split('/').pop() || '';
+        pinName = `veritas-document-${part.replace('.json', '')}`;
+      }
+
+      const ipfsResult = await this.storeInIPFS(payload, encryption, pinName);
       if (ipfsResult.success) {
         result.ipfsHash = ipfsResult.ipfsHash;
         result.ipfsGatewayUrl = ipfsResult.ipfsGatewayUrl;
@@ -401,13 +411,15 @@ export class StorageManager {
 
   private async storeInIPFS(
     payload: string,
-    encryption?: EncryptionMetadata
+    encryption?: EncryptionMetadata,
+    pinName?: string
   ): Promise<{ success: boolean; ipfsHash?: string; ipfsGatewayUrl?: string; error?: string }> {
     try {
       const record = await createIPFSRecord(
         this.ipfsClient,
         payload,
-        'application/json'
+        'application/json',
+        pinName
       );
 
       return {

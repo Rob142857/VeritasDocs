@@ -565,6 +565,19 @@
   }
   async function encryptDocumentData(data, publicKeyB64u) {
     await ensureCryptoReady();
+    async function gzipCompress(bytes) {
+      try {
+        if (typeof window.CompressionStream === "function") {
+          const cs = new window.CompressionStream("gzip");
+          const body = new Response(bytes).body;
+          const stream = body.pipeThrough(cs);
+          const compressed = await new Response(stream).arrayBuffer();
+          return new Uint8Array(compressed);
+        }
+      } catch {
+      }
+      return bytes;
+    }
     const encapsResult = await kyberEncaps(publicKeyB64u);
     if (encapsResult.error) throw new Error(encapsResult.error);
     const sharedSecret = encapsResult.shared_b64u;
@@ -573,7 +586,10 @@
     const kdfResult = await hkdfSha256(sharedSecret, infoB64u, "", 32);
     if (kdfResult.error) throw new Error(kdfResult.error);
     const aesKey = kdfResult.key_b64u;
-    const dekB64u = b64uEncode(new TextEncoder().encode(data));
+    const rawBytes = new TextEncoder().encode(data);
+    const compressedBytes = await gzipCompress(rawBytes);
+    const usedCompression = compressedBytes !== void 0 && compressedBytes.length < rawBytes.length ? "gzip" : "none";
+    const dekB64u = b64uEncode(usedCompression === "gzip" ? compressedBytes : rawBytes);
     const aadB64u = b64uEncode(new TextEncoder().encode("veritas-documents"));
     const aesResult = await aesGcmWrap(aesKey, dekB64u, aadB64u);
     if (aesResult.error) throw new Error(aesResult.error);
@@ -582,7 +598,8 @@
       algorithm: "kyber768-aes256gcm",
       kem_ct: kemCt,
       iv: aesResult.iv_b64u,
-      ciphertext: aesResult.ct_b64u
+      ciphertext: aesResult.ct_b64u,
+      compression: usedCompression
     });
   }
   async function decryptDocumentData(encryptedData, privateKeyB64u) {
@@ -598,7 +615,23 @@
     const aadB64u = b64uEncode(new TextEncoder().encode("veritas-documents"));
     const aesResult = await aesGcmUnwrap(aesKey, encData.iv, encData.ciphertext, aadB64u);
     if (aesResult.error) throw new Error(aesResult.error);
-    return new TextDecoder().decode(b64uDecode(aesResult.dek_b64u));
+    async function gzipDecompress(bytes) {
+      try {
+        if (typeof window.DecompressionStream === "function") {
+          const ds = new window.DecompressionStream("gzip");
+          const body = new Response(bytes).body;
+          const stream = body.pipeThrough(ds);
+          const decompressed = await new Response(stream).arrayBuffer();
+          return new Uint8Array(decompressed);
+        }
+      } catch {
+      }
+      return bytes;
+    }
+    const decryptedBytes = b64uDecode(aesResult.dek_b64u);
+    const needsDecompress = encData && encData.compression === "gzip";
+    const outputBytes = needsDecompress ? await gzipDecompress(decryptedBytes) : decryptedBytes;
+    return new TextDecoder().decode(outputBytes);
   }
   async function generateClientKeypair() {
     await ensureCryptoReady();

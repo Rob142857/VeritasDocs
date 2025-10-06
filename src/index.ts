@@ -2184,6 +2184,9 @@ class VeritasApp {
       if (result.success && (result.data.pending?.length > 0 || result.data.confirmed?.length > 0)) {
         const allAssets = [...(result.data.pending || []), ...(result.data.confirmed || [])];
         
+        // Sort by creation date, newest first
+        allAssets.sort((a, b) => b.createdAt - a.createdAt);
+        
         container.innerHTML = allAssets.map(asset => '<div class="asset-card"><div class="asset-type">' + (asset.documentType || 'unknown') + '</div><div class="asset-title">' + asset.title + '</div><div class="asset-description">' + (asset.description || '') + '</div><div class="asset-meta"><span>Token: ' + asset.tokenId + '</span><span>' + new Date(asset.createdAt).toLocaleDateString() + '</span><span class="badge ' + (asset.status === 'confirmed' ? 'badge-success' : 'badge-warning') + '">' + (asset.status || asset.paymentStatus) + '</span></div><div class="asset-actions" style="margin-top: 1rem; display: flex; gap: 0.5rem;"><button class="btn btn-secondary btn-sm" onclick="app.decryptAsset(\\'' + asset.id + '\\')">🔓 Decrypt</button><button class="btn btn-secondary btn-sm" onclick="app.downloadAsset(\\'' + asset.id + '\\')">💾 Download</button></div></div>').join('');
         
         document.getElementById('owned-count').textContent = result.data.confirmed?.length || 0;
@@ -2197,6 +2200,15 @@ class VeritasApp {
       console.error('Failed to load assets:', error);
       document.getElementById('user-assets').innerHTML = '<div class="alert alert-error">Failed to load assets</div>';
     }
+  }
+
+  logout() {
+    this.currentUser = null;
+    localStorage.removeItem('veritas-user');
+    localStorage.removeItem('veritas-session');
+    localStorage.removeItem('veritas-keys');
+    sessionStorage.clear();
+    this.navigateTo('login');
   }
 
   showAlert(type, message) {

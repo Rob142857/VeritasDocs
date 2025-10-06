@@ -654,8 +654,85 @@ export class VDCBlockchain {
    * Get a block by number
    */
   async getBlock(blockNumber: number): Promise<VDCBlock | null> {
+    // Try KV first (fastest)
     const blockData = await this.env.VERITAS_KV.get(`vdc:block:${blockNumber}`);
-    return blockData ? JSON.parse(blockData) : null;
+    if (blockData) {
+      return JSON.parse(blockData);
+    }
+
+    // Fallback to R2
+    console.log(`⚠️ Block ${blockNumber} not in KV, trying R2...`);
+    try {
+      const r2Key = `blocks/${blockNumber}.json`;
+      const r2Object = await this.env.VDC_STORAGE.get(r2Key);
+      
+      if (r2Object) {
+        const r2Data = await r2Object.json() as any;
+        const block = r2Data.data || r2Data; // Handle StoredObject wrapper
+        
+        // Restore to KV for future fast lookups
+        console.log(`✅ Found block ${blockNumber} in R2, restoring to KV...`);
+        await this.env.VERITAS_KV.put(`vdc:block:${blockNumber}`, JSON.stringify(block));
+        
+        return block;
+      }
+    } catch (r2Error) {
+      console.error(`❌ R2 fallback failed for block ${blockNumber}:`, r2Error);
+    }
+
+    // Final fallback to IPFS (slowest but most reliable)
+    console.log(`⚠️ Block ${blockNumber} not in R2, trying IPFS...`);
+    try {
+      // We need to scan IPFS pins to find the block
+      // This is expensive but necessary for resilience
+      const ipfsResponse = await fetch('https://api.pinata.cloud/data/pinList?status=pinned&pageLimit=100', {
+        headers: {
+          'pinata_api_key': this.env.PINATA_API_KEY || '',
+          'pinata_secret_api_key': this.env.PINATA_SECRET_KEY || ''
+        }
+      });
+
+      if (ipfsResponse.ok) {
+        const ipfsData = await ipfsResponse.json() as { rows?: Array<{ ipfs_pin_hash: string }> };
+        
+        // Find the block by scanning pins (they contain block data)
+        for (const pin of ipfsData.rows || []) {
+          try {
+            const ipfsGatewayUrl = `https://gateway.pinata.cloud/ipfs/${pin.ipfs_pin_hash}`;
+            const blockResponse = await fetch(ipfsGatewayUrl);
+            
+            if (blockResponse.ok) {
+              const ipfsBlock = await blockResponse.json() as any;
+              const block = ipfsBlock.data || ipfsBlock; // Handle StoredObject wrapper
+              
+              if (block.blockNumber === blockNumber) {
+                console.log(`✅ Found block ${blockNumber} in IPFS (${pin.ipfs_pin_hash}), restoring to KV and R2...`);
+                
+                // Restore to both KV and R2
+                await this.env.VERITAS_KV.put(`vdc:block:${blockNumber}`, JSON.stringify(block));
+                await this.env.VDC_STORAGE.put(`blocks/${blockNumber}.json`, JSON.stringify({
+                  data: block,
+                  metadata: {
+                    key: `blocks/${blockNumber}.json`,
+                    storedAt: Date.now()
+                  }
+                }));
+                
+                return block;
+              }
+            }
+          } catch (pinError) {
+            // Skip this pin and try next
+            continue;
+          }
+        }
+      }
+    } catch (ipfsError) {
+      console.error(`❌ IPFS fallback failed for block ${blockNumber}:`, ipfsError);
+    }
+
+    console.error(`❌ Block ${blockNumber} not found in any storage tier (KV, R2, IPFS)`);
+    return null;
   }
 
   /**

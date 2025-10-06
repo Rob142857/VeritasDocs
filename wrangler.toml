@@ -8,47 +8,20 @@ type = "Text"
 globs = ["**/*.md"]
 fallthrough = true
 
-[env.production.vars]
+# Production configuration (default)
+[vars]
 ENVIRONMENT = "production"
 MAATARA_API_BASE = "https://maatara-core-worker.rme-6e5.workers.dev"
 ETHEREUM_RPC_URL = "https://cloudflare-eth.com/v1/mainnet"
 IPFS_GATEWAY_URL = "https://cloudflare-ipfs.com"
 
-[env.staging.vars]
-ENVIRONMENT = "staging"
-
-[[env.production.kv_namespaces]]
+[[kv_namespaces]]
 binding = "VERITAS_KV"
 id = "9f0ea31309cd44cab7bfe3569e16aa45"
 
-[[env.production.r2_buckets]]
-binding = "VDC_STORAGE"
-bucket_name = "veritas-docs-production-storage"
-
-[[env.staging.kv_namespaces]]
-binding = "VERITAS_KV"
-id = "your-staging-kv-namespace-id"
-
-[[env.staging.r2_buckets]]
-binding = "VDC_STORAGE"
-bucket_name = "veritas-docs-staging-storage"
-
-[vars]
-ENVIRONMENT = "development"
-MAATARA_API_BASE = "https://maatara-core-worker.rme-6e5.workers.dev"
-# Cloudflare Web3 Gateway URLs
-ETHEREUM_RPC_URL = "https://cloudflare-eth.com/v1/mainnet"
-IPFS_GATEWAY_URL = "https://cloudflare-ipfs.com"
-
-[[kv_namespaces]]
-binding = "VERITAS_KV"
-id = "77a8b18c45f341b7aa1b91de1dc8a55e"
-preview_id = "f280a31ef23b4d7cb29d5ac314457674"
-
 [[r2_buckets]]
 binding = "VDC_STORAGE"
-bucket_name = "veritas-docs-dev-storage"
-preview_bucket_name = "veritas-docs-dev-storage-preview"
+bucket_name = "veritas-docs-production-storage"
 
 
 # Add your secrets using: wrangler secret put SECRET_NAME

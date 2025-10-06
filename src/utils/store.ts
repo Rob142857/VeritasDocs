@@ -156,7 +156,9 @@ export class StorageManager {
         result.r2Key = r2Result.r2Key;
       } else {
         console.error(`R2 storage failed for ${key}:`, r2Result.error);
-        result.error = r2Result.error;
+        result.success = false;
+        result.error = `R2 storage required but failed: ${r2Result.error}`;
+        throw new Error(result.error);
       }
     }
 
@@ -183,7 +185,9 @@ export class StorageManager {
         result.kvKey = kvResult.kvKey;
       } else {
         console.error(`KV storage failed for ${key}:`, kvResult.error);
-        result.error = kvResult.error;
+        result.success = false;
+        result.error = `KV storage required but failed: ${kvResult.error}`;
+        throw new Error(result.error);
       }
     }
 

@@ -601,10 +601,51 @@ authHandler.post('/login', async (c) => {
     console.log(`✅ Found VDC transaction ID: ${vdcTxId} for user: ${userId}`);
 
     const vdc = await initializeVDC(env);
-    const vdcTx = await vdc.getTransaction(vdcTxId);
+    let vdcTx = await vdc.getTransaction(vdcTxId);
     if (!vdcTx) {
-      console.error(`❌ VDC transaction data not found: ${vdcTxId}`);
-      return c.json<APIResponse>({ success: false, error: 'Blockchain transaction data not found' }, 500);
+      console.warn(`⚠️ VDC tx index missing for ${vdcTxId} — scanning recent blocks as fallback`);
+      try {
+        const latestBlock = await vdc.getLatestBlock();
+        if (latestBlock) {
+          let foundTx: any = null;
+          let foundBlockNumber: number | null = null;
+          const maxScan = 50; // scan up to last 50 blocks
+          let scanned = 0;
+          for (let bn = latestBlock.blockNumber; bn >= 0 && scanned < maxScan; bn--, scanned++) {
+            const block = await vdc.getBlock(bn);
+            if (block && Array.isArray(block.transactions)) {
+              const match = block.transactions.find((t: any) => t.id === vdcTxId);
+              if (match) {
+                foundTx = match;
+                foundBlockNumber = bn;
+                break;
+              }
+            }
+          }
+
+          if (foundTx && foundBlockNumber !== null) {
+            console.log(`✅ Found tx ${vdcTxId} in block #${foundBlockNumber}; rebuilding KV index`);
+            // Rebuild missing transaction index so future lookups are fast
+            await env.VERITAS_KV.put(
+              `vdc:tx:${vdcTxId}`,
+              JSON.stringify({
+                blockNumber: foundBlockNumber,
+                txId: vdcTxId,
+                type: foundTx.type,
+                timestamp: foundTx.timestamp
+              })
+            );
+            vdcTx = foundTx;
+          }
+        }
+      } catch (scanErr) {
+        console.error('❌ Fallback block scan failed:', scanErr);
+      }
+
+      if (!vdcTx) {
+        console.error(`❌ VDC transaction data not found after fallback scan: ${vdcTxId}`);
+        return c.json<APIResponse>({ success: false, error: 'Blockchain transaction data not found' }, 500);
+      }
     }
 
     console.log(`✅ Loaded VDC transaction: ${vdcTxId}, type: ${vdcTx.type}`);

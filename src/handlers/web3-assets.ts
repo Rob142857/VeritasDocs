@@ -175,18 +175,8 @@ enhancedAssetHandler.post('/create-web3', async (c) => {
         'application/json'
       );
     } catch (ipfsError) {
-      // IPFS upload failed (likely Pinata not configured), use placeholder hash
-      console.warn('IPFS upload failed, using placeholder:', ipfsError);
-      const placeholderTimestamp = Date.now();
-      const placeholderHash = `placeholder_${placeholderTimestamp}`;
-      ipfsRecord = {
-        hash: placeholderHash,
-        size: documentSize,
-        contentType: 'application/json',
-        timestamp: placeholderTimestamp,
-        isPinned: false,
-        gatewayUrl: ipfsClient.getIPFSUrl(placeholderHash)
-      };
+      console.error('IPFS upload failed:', ipfsError);
+      return c.json<APIResponse>({ success: false, error: 'IPFS upload failed' }, 500);
     }
 
     // 3. Create asset metadata for blockchain anchoring
@@ -212,12 +202,8 @@ enhancedAssetHandler.post('/create-web3', async (c) => {
         'application/json'
       );
     } catch (metadataError) {
-      console.warn('IPFS metadata upload failed, using placeholder:', metadataError);
-      metadataRecord = {
-        hash: `metadata_${Date.now()}`,
-        size: JSON.stringify(assetMetadata).length,
-        timestamp: Date.now()
-      };
+      console.error('IPFS metadata upload failed:', metadataError);
+      return c.json<APIResponse>({ success: false, error: 'IPFS metadata upload failed' }, 500);
     }
 
     // 5. Store encrypted document in R2 for durable, low-latency retrieval
@@ -329,17 +315,19 @@ enhancedAssetHandler.post('/create-web3', async (c) => {
       apiVersion: '2023-10-16',
     });
 
+    const priceCurrency = (env.PRICE_CURRENCY || 'usd').toLowerCase();
+    const priceCents = parseInt(env.PRICE_CENTS || '2500', 10);
     const checkoutSession = await stripe.checkout.sessions.create({
       payment_method_types: ['card'],
       line_items: [
         {
           price_data: {
-            currency: 'usd',
+            currency: priceCurrency,
             product_data: {
               name: 'Veritas Document Asset',
               description: `${title} - ${documentType}`,
             },
-            unit_amount: 2500, // $25.00 in cents
+            unit_amount: priceCents, // price in smallest unit
           },
           quantity: 1,
         },

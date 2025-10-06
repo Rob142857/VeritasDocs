@@ -75,6 +75,14 @@ app.post('/api/stripe/webhook', async (c) => {
         return c.json({ success: false, error: 'Invalid session metadata' }, 400);
       }
 
+      // Idempotency: ensure we haven't processed this session yet
+      const processedKey = `stripe_processed:${session.id}`;
+      const alreadyProcessed = await env.VERITAS_KV.get(processedKey);
+      if (alreadyProcessed) {
+        console.log(`Stripe session ${session.id} already processed`);
+        return c.json({ success: true, message: 'Already processed' });
+      }
+
       // Get asset from KV
       const assetData = await env.VERITAS_KV.get(`asset:${assetId}`);
       if (!assetData) {
@@ -83,6 +91,18 @@ app.post('/api/stripe/webhook', async (c) => {
       }
 
       const asset = JSON.parse(assetData);
+
+      // Verify asset belongs to user and session matches asset's stored session
+      if (asset.ownerId !== userId || (asset.stripeSessionId && asset.stripeSessionId !== session.id)) {
+        console.error('Session-user-asset mismatch; rejecting');
+        return c.json({ success: false, error: 'Session verification failed' }, 400);
+      }
+
+      // Verify Stripe session status and payment
+      if (session.payment_status !== 'paid' && session.status !== 'complete') {
+        console.error('Stripe session not fully paid/complete');
+        return c.json({ success: false, error: 'Payment not completed' }, 400);
+      }
       
       // Update asset payment status
       asset.paymentStatus = 'completed';
@@ -105,8 +125,74 @@ app.post('/api/stripe/webhook', async (c) => {
       ownedList.push(assetId);
       await env.VERITAS_KV.put(userAssetsKey, JSON.stringify(ownedList));
 
+      // Verify PaymentIntent amount/currency before creating VDC transaction
+      try {
+        const Stripe = (await import('stripe')).default;
+        const stripe = new Stripe(env.STRIPE_SECRET_KEY, { apiVersion: '2023-10-16' });
+        if (session.payment_intent) {
+          const pi = await stripe.paymentIntents.retrieve(typeof session.payment_intent === 'string' ? session.payment_intent : session.payment_intent.id);
+          const expectedAmount = parseInt(env.PRICE_CENTS || '2500', 10);
+          const expectedCurrency = (env.PRICE_CURRENCY || 'usd').toLowerCase();
+          const piCurrency = (pi.currency || '').toLowerCase();
+          if (pi.amount_received !== expectedAmount || piCurrency !== expectedCurrency) {
+            console.error('PaymentIntent amount/currency mismatch', {
+              received: { amount: pi.amount_received, currency: piCurrency },
+              expected: { amount: expectedAmount, currency: expectedCurrency }
+            });
+            return c.json({ success: false, error: 'Payment verification failed' }, 400);
+          }
+        }
+      } catch (verifyErr: any) {
+        console.error('Failed to verify PaymentIntent:', verifyErr?.message || verifyErr);
+        return c.json({ success: false, error: 'Payment verification error' }, 400);
+      }
+
       // Create VDC transaction for asset registration
       console.log('Creating VDC transaction for asset:', assetId);
+      try {
+        const { initializeVDC } = await import('./utils/blockchain');
+        const vdc = await initializeVDC(env);
+
+        // Build payload for admin action to register the asset on-chain
+        const payload: any = {
+          assetId,
+          userId,
+          tokenId: asset.tokenId,
+          ipfsHash: asset.ipfsHash,
+          ipfsMetadataHash: asset.ipfsMetadataHash,
+          documentR2Key: asset.storage?.documentR2Key,
+          createdAt: asset.createdAt,
+          title: asset.title,
+          documentType: asset.documentType
+        };
+
+  const { transaction } = await vdc.addAdminAction('register_asset', payload);
+
+        // Update asset with VDC transaction reference and mark pending mining
+        asset.vdcTransactionId = transaction.id;
+        asset.status = 'pending_mining';
+        await env.VERITAS_KV.put(`asset:${assetId}`, JSON.stringify(asset));
+        console.log(`✓ Queued VDC registration tx ${transaction.id} for asset ${assetId}`);
+
+        // Optional: auto-mine ONLY this tx to guarantee one block per Stripe transaction
+        if ((env as any)?.AUTO_MINE_ON_PAYMENT === 'true') {
+          try {
+            const mined = await vdc.mineSpecificTransactions([transaction.id]);
+            console.log(`⛏️  Auto-mined block #${mined.blockNumber} containing tx ${transaction.id}`);
+          } catch (mineErr: any) {
+            console.warn('Auto-mine after payment failed:', mineErr?.message || mineErr);
+          }
+        }
+      } catch (vdcErr: any) {
+        console.error('Failed to queue VDC transaction after payment:', vdcErr?.message || vdcErr);
+      }
+      // Mark session as processed to prevent replay
+      await env.VERITAS_KV.put(processedKey, JSON.stringify({
+        sessionId: session.id,
+        assetId,
+        userId,
+        processedAt: Date.now()
+      }));
       
       console.log('Payment completed for asset:', assetId);
     }
@@ -1799,6 +1885,152 @@ class VeritasApp {
     }
   }
 
+  async handleCreateAsset() {
+    try {
+      if (!this.currentUser) {
+        this.showAlert('error', 'You must be logged in to create an asset.');
+        return;
+      }
+
+      const titleEl = document.getElementById('asset-title');
+      const descEl = document.getElementById('asset-description');
+      const typeEl = document.getElementById('document-type');
+      const fileEl = document.getElementById('document-file');
+      const pubEl = document.getElementById('public-searchable');
+
+      const title = titleEl ? titleEl.value.trim() : '';
+      const description = descEl ? descEl.value : '';
+      const documentType = typeEl ? typeEl.value : '';
+      const isPubliclySearchable = !!(pubEl && pubEl.checked);
+
+      const file = fileEl && fileEl.files && fileEl.files[0] ? fileEl.files[0] : null;
+
+      if (!title || !documentType || !file) {
+        this.showAlert('error', 'Please fill in the title, type, and choose a file.');
+        return;
+      }
+
+      // Ensure cryptography is ready
+      await window.VeritasCrypto.ensureCryptoReady();
+
+      // Read file as text (JSON or text documents supported)
+      const documentData = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : '');
+        reader.onerror = () => reject(new Error('Failed to read file'));
+        reader.readAsText(file);
+      });
+
+      // Encrypt document client-side with user's Kyber public key
+      const kyberPublicKey = this.currentUser.publicKey || this.currentUser.kyberPublicKey;
+      if (!kyberPublicKey) {
+        this.showAlert('error', 'Missing Kyber public key for encryption.');
+        return;
+      }
+
+      this.showAlert('info', 'Encrypting document...');
+      const encryptedData = await window.VeritasCrypto.encryptDocumentData(
+        documentData,
+        kyberPublicKey
+      );
+
+  // Hash the ENCRYPTED payload; server verifies against the sent documentData
+  const documentHash = await window.VeritasCrypto.hashData(encryptedData);
+
+      // Prepare signature payload and sign with Dilithium private key from session
+      const dilithiumPriv = this.privateKeys && this.privateKeys.dilithium;
+      if (!dilithiumPriv) {
+        this.showAlert('error', 'Your Dilithium private key is required to sign the request. Please re-login.');
+        return;
+      }
+
+      const signaturePayload = JSON.stringify({
+        userId: this.currentUser.id,
+        title,
+        description,
+        documentType,
+        documentHash,
+        timestamp: Date.now()
+      });
+
+      const signature = await window.VeritasCrypto.signData(signaturePayload, dilithiumPriv);
+
+      // Send to backend for storage (R2 + IPFS) and Stripe session creation
+      this.showAlert('info', 'Submitting asset for storage and payment...');
+      const resp = await fetch('/api/web3-assets/create-web3', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: this.currentUser.id,
+          title,
+          description,
+          documentType,
+          documentData: encryptedData,
+          isPubliclySearchable,
+          signature,
+          signaturePayload,
+          signatureVersion: '1.0'
+        })
+      });
+
+      const result = await resp.json();
+      if (result && result.success) {
+        this.showAlert('success', 'Asset created! Redirecting to payment...');
+        if (result.data && result.data.stripeUrl) {
+          setTimeout(() => {
+            window.location.href = result.data.stripeUrl;
+          }, 1200);
+        }
+      } else {
+        const msg = (result && (result.error || result.message)) || 'Asset creation failed';
+        this.showAlert('error', msg);
+      }
+    } catch (err) {
+      console.error('handleCreateAsset error:', err);
+      this.showAlert('error', (err && err.message) ? err.message : 'Asset creation failed');
+    }
+  }
+
+  async handleSearch() {
+    const queryEl = document.getElementById('search-query');
+    const typeEl = document.getElementById('search-type');
+    const container = document.getElementById('search-results');
+
+    const q = queryEl ? queryEl.value.trim() : '';
+    const t = typeEl ? typeEl.value : '';
+
+    if (container) container.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+
+    try {
+      const params = new URLSearchParams();
+      if (q) params.append('q', q);
+      if (t) params.append('type', t);
+
+      const resp = await fetch('/api/search?' + params.toString());
+      const result = await resp.json();
+
+      if (!container) return;
+
+      if (result.success && result.data && Array.isArray(result.data.assets) && result.data.assets.length > 0) {
+        container.innerHTML = result.data.assets.map((asset) => (
+          '<div class="asset-card">' +
+            '<div class="asset-type">' + (asset.documentType || '') + '</div>' +
+            '<div class="asset-title">' + (asset.title || '') + '</div>' +
+            '<div class="asset-description">' + (asset.description || '') + '</div>' +
+            '<div class="asset-meta">' +
+              '<span>Token: ' + (asset.tokenId || '') + '</span>' +
+              '<span>' + (asset.createdAt ? new Date(asset.createdAt).toLocaleDateString() : '') + '</span>' +
+            '</div>' +
+          '</div>'
+        )).join('');
+      } else {
+        container.innerHTML = '<p class="text-center text-muted">No assets found matching your search criteria.</p>';
+      }
+    } catch (err) {
+      if (container) container.innerHTML = '<div class="alert alert-error">Failed to search assets</div>';
+    }
+  }
+
   renderAdmin() {
     const content = document.getElementById('content');
     content.innerHTML = [
@@ -1828,8 +2060,18 @@ class VeritasApp {
       '    <div id="admin-invite-result" class="mt-2" style="display:none;"></div>',
       '    <div id="admin-invite-actions" style="display:none; gap: 0.5rem; margin-top: 0.5rem;">',
       '      <button id="admin-invite-copy" class="btn btn-secondary">Copy Link</button>',
-  '      <button id="admin-invite-email-btn" class="btn">Compose Email</button>',
+      '      <button id="admin-invite-email-btn" class="btn">Compose Email</button>',
       '    </div>',
+      '  </section>',
+      '  <section class="card" style="margin: 1rem 0;">',
+      '    <h3 class="card-title">Blockchain Maintenance</h3>',
+      '    <div style="display: flex; gap: 0.75rem; flex-wrap: wrap;">',
+      '      <button id="rebuild-index-btn" class="btn btn-secondary">',
+      '        <span style="margin-right: 0.5rem;">[SYNC]</span>',
+      '        Rebuild Transaction Indexes',
+      '      </button>',
+      '    </div>',
+      '    <div id="rebuild-index-result" style="margin-top: 0.75rem; display: none;"></div>',
       '  </section>',
       '  <div id="admin-content">',
       '    <div class="loading"><div class="spinner"></div><p>Loading pending transactions...</p></div>',
@@ -1838,13 +2080,13 @@ class VeritasApp {
     ].join('');
 
     // Wire admin invite form
-  const emailEl = document.getElementById('admin-invite-email');
-  const typeEl = document.getElementById('admin-invite-type');
-  const createBtn = document.getElementById('admin-invite-create');
-  const resultEl = document.getElementById('admin-invite-result');
-  const actionsEl = document.getElementById('admin-invite-actions');
-  const copyBtn = document.getElementById('admin-invite-copy');
-  const emailBtn = document.getElementById('admin-invite-email-btn');
+    const emailEl = document.getElementById('admin-invite-email');
+    const typeEl = document.getElementById('admin-invite-type');
+    const createBtn = document.getElementById('admin-invite-create');
+    const resultEl = document.getElementById('admin-invite-result');
+    const actionsEl = document.getElementById('admin-invite-actions');
+    const copyBtn = document.getElementById('admin-invite-copy');
+    const emailBtn = document.getElementById('admin-invite-email-btn');
 
     if (createBtn) {
       createBtn.onclick = async () => {
@@ -1875,6 +2117,48 @@ class VeritasApp {
       };
     }
 
+    // Wire rebuild index button
+    const rebuildBtn = document.getElementById('rebuild-index-btn');
+    const rebuildResult = document.getElementById('rebuild-index-result');
+    
+    if (rebuildBtn) {
+      rebuildBtn.onclick = async () => {
+        try {
+          if (!this.sessionToken) throw new Error('Session expired. Please log in again.');
+          rebuildBtn.disabled = true;
+          rebuildBtn.textContent = 'Rebuilding indexes...';
+          
+          const resp = await fetch('/api/vdc/rebuild-indexes', {
+            method: 'POST',
+            headers: { 'Authorization': 'Bearer ' + this.sessionToken }
+          });
+          const data = await resp.json();
+          
+          if (!data.success) throw new Error(data.error || 'Failed to rebuild indexes');
+          
+          if (rebuildResult) {
+            rebuildResult.style.display = 'block';
+            rebuildResult.className = 'alert alert-success';
+            rebuildResult.innerHTML = [
+              '<strong>[OK] Indexes rebuilt successfully!</strong><br>',
+              'Blocks scanned: ' + data.data.blocksScanned + '<br>',
+              'Transactions indexed: ' + data.data.transactionsIndexed,
+              data.data.errors > 0 ? '<br>Errors: ' + data.data.errors : ''
+            ].join('');
+          }
+        } catch (err) {
+          if (rebuildResult) {
+            rebuildResult.style.display = 'block';
+            rebuildResult.className = 'alert alert-error';
+            rebuildResult.textContent = (err && err.message) ? err.message : String(err);
+          }
+        } finally {
+          rebuildBtn.disabled = false;
+          rebuildBtn.innerHTML = '<span style="margin-right: 0.5rem;">[SYNC]</span>Rebuild Transaction Indexes';
+        }
+      };
+    }
+
     // Load pending transactions section
     this.loadPendingTransactions();
   }
@@ -1890,53 +2174,62 @@ class VeritasApp {
         const transactions = result.data.transactions;
         
         const parts = [
-          '<div style="margin-bottom: 1rem;">',
-          '  <strong style="color: #f59e0b;">' + transactions.length + ' Pending Transaction' + (transactions.length !== 1 ? 's' : '') + '</strong>',
+          '<div style="margin-bottom: 1.5rem;">',
+          '  <h3 style="color: #f59e0b; margin-bottom: 0.5rem;">Pending Transactions (' + transactions.length + ')</h3>',
+          '  <p style="font-size: 0.875rem; color: #6b7280;">Click on a transaction to view details and actions</p>',
           '</div>',
-          '<div style="display: flex; flex-direction: column; gap: 1rem;">'
+          '<div style="display: flex; flex-direction: column; gap: 0.75rem;">'
         ];
         
         transactions.forEach((tx, index) => {
           const txData = tx.data || {};
+          const txId = tx.id.replace(/'/g, "\\'");
+          
           parts.push(
-            '<div class="card" style="border-left: 4px solid #f59e0b;">',
-            '  <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 1rem;">',
-            '    <div>',
-            '      <div style="font-weight: 600; color: #f59e0b;">Transaction #' + (index + 1) + '</div>',
-            '      <div style="font-size: 0.75rem; color: #6b7280; margin-top: 0.25rem;">' + tx.id + '</div>',
+            '<div class="card" style="border-left: 4px solid #f59e0b; cursor: pointer; transition: all 0.2s;" onclick="window.app.toggleTxDetails(\\'' + txId + '\\')" id="tx-card-' + txId + '">',
+            '  <div style="display: flex; justify-content: space-between; align-items: center;">',
+            '    <div style="flex: 1; min-width: 0;">',
+            '      <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.25rem;">',
+            '        <span style="font-weight: 600; color: #f59e0b;">#' + (index + 1) + '</span>',
+            '        <span style="background: #fef3c7; color: #92400e; padding: 0.125rem 0.5rem; border-radius: 0.25rem; font-size: 0.75rem; font-weight: 600; white-space: nowrap;">' + tx.type + '</span>',
+            '      </div>',
+            '      <div style="font-size: 0.75rem; color: #6b7280; font-family: monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">' + tx.id + '</div>',
             '    </div>',
-            '    <div style="background: #fef3c7; color: #92400e; padding: 0.25rem 0.75rem; border-radius: 0.375rem; font-size: 0.75rem; font-weight: 600;">',
-            '      ' + tx.type,
-            '    </div>',
-            '  </div>',
-            '  <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 0.75rem; margin-bottom: 1rem; font-size: 0.875rem;">',
-            '    <div>',
-            '      <div style="color: #6b7280; font-size: 0.75rem; margin-bottom: 0.25rem;">Asset ID</div>',
-            '      <div style="font-family: monospace; font-size: 0.75rem;">' + (txData.assetId || 'N/A') + '</div>',
-            '    </div>',
-            '    <div>',
-            '      <div style="color: #6b7280; font-size: 0.75rem; margin-bottom: 0.25rem;">Token ID</div>',
-            '      <div style="font-family: monospace; font-size: 0.75rem;">' + (txData.tokenId || 'N/A') + '</div>',
-            '    </div>',
-            '    <div>',
-            '      <div style="color: #6b7280; font-size: 0.75rem; margin-bottom: 0.25rem;">Creator</div>',
-            '      <div style="font-family: monospace; font-size: 0.75rem;">' + (txData.creatorId || 'N/A') + '</div>',
-            '    </div>',
-            '    <div>',
-            '      <div style="color: #6b7280; font-size: 0.75rem; margin-bottom: 0.25rem;">Created</div>',
-            '      <div>' + new Date(tx.timestamp).toLocaleString() + '</div>',
+            '    <div style="display: flex; align-items: center; gap: 0.75rem; flex-shrink: 0;">',
+            '      <div style="font-size: 0.75rem; color: #6b7280; display: none; sm:block;">' + new Date(tx.timestamp).toLocaleString() + '</div>',
+            '      <span id="tx-toggle-' + txId + '" style="color: #f59e0b; font-size: 1.25rem;">▼</span>',
             '    </div>',
             '  </div>',
-            '  <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">',
-            '    <button onclick="window.app.queryTransaction(\\'' + tx.id + '\\')" class="btn btn-secondary" style="flex: 1; min-width: 120px;">',
-            '      [SEARCH] Query',
-            '    </button>',
-            '    <button onclick="window.app.mineTransaction(\\'' + tx.id + '\\')" class="btn btn-primary" style="flex: 1; min-width: 160px;">',
-            '      [APPROVE] Approve (Sign and Mine Block)',
-            '    </button>',
-            '    <button onclick="window.app.deleteTransaction(\\'' + tx.id + '\\')" class="btn" style="flex: 1; min-width: 120px; background: #dc2626; color: white;">',
-            '      [DELETE] Delete',
-            '    </button>',
+            '  <div id="tx-details-' + txId + '" style="display: none; margin-top: 1rem; padding-top: 1rem; border-top: 1px solid #e5e7eb;">',
+            '    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 0.75rem; margin-bottom: 1rem; font-size: 0.875rem;">',
+            '      <div>',
+            '        <div style="color: #6b7280; font-size: 0.75rem; margin-bottom: 0.25rem;">Asset ID</div>',
+            '        <div style="font-family: monospace; font-size: 0.75rem; word-break: break-all;">' + (txData.assetId || 'N/A') + '</div>',
+            '      </div>',
+            '      <div>',
+            '        <div style="color: #6b7280; font-size: 0.75rem; margin-bottom: 0.25rem;">Token ID</div>',
+            '        <div style="font-family: monospace; font-size: 0.75rem; word-break: break-all;">' + (txData.tokenId || 'N/A') + '</div>',
+            '      </div>',
+            '      <div>',
+            '        <div style="color: #6b7280; font-size: 0.75rem; margin-bottom: 0.25rem;">Creator</div>',
+            '        <div style="font-family: monospace; font-size: 0.75rem; word-break: break-all;">' + (txData.creatorId || txData.userId || 'N/A') + '</div>',
+            '      </div>',
+            '      <div>',
+            '        <div style="color: #6b7280; font-size: 0.75rem; margin-bottom: 0.25rem;">Created</div>',
+            '        <div style="font-size: 0.75rem;">' + new Date(tx.timestamp).toLocaleString() + '</div>',
+            '      </div>',
+            '    </div>',
+            '    <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">',
+            '      <button onclick="event.stopPropagation(); window.app.queryTransaction(\\'' + txId + '\\')" class="btn btn-secondary" style="flex: 1; min-width: 120px;">',
+            '        [SEARCH] Query',
+            '      </button>',
+            '      <button onclick="event.stopPropagation(); window.app.mineTransaction(\\'' + txId + '\\')" class="btn btn-primary" style="flex: 1; min-width: 140px;">',
+            '        [APPROVE] Mine Block',
+            '      </button>',
+            '      <button onclick="event.stopPropagation(); window.app.deleteTransaction(\\'' + txId + '\\')" class="btn" style="flex: 1; min-width: 120px; background: #dc2626; color: white;">',
+            '        [DELETE] Delete',
+            '      </button>',
+            '    </div>',
             '  </div>',
             '</div>'
           );
@@ -1956,6 +2249,26 @@ class VeritasApp {
     } catch (error) {
       console.error('Failed to load pending transactions:', error);
       document.getElementById('admin-content').innerHTML = '<div class="alert alert-error">Failed to load pending transactions</div>';
+    }
+  }
+
+  toggleTxDetails(txId) {
+    const details = document.getElementById('tx-details-' + txId);
+    const toggle = document.getElementById('tx-toggle-' + txId);
+    const card = document.getElementById('tx-card-' + txId);
+    
+    if (details && toggle && card) {
+      const isOpen = details.style.display !== 'none';
+      
+      if (isOpen) {
+        details.style.display = 'none';
+        toggle.textContent = '▼';
+        card.style.background = '';
+      } else {
+        details.style.display = 'block';
+        toggle.textContent = '▲';
+        card.style.background = '#fffbeb';
+      }
     }
   }
 
@@ -2293,7 +2606,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   return c.text(js, 200, {
     'Content-Type': 'application/javascript; charset=utf-8',
-    'Cache-Control': 'public, max-age=3600'
+    'Cache-Control': 'no-store'
   });
 });
 
@@ -2340,8 +2653,8 @@ const appHTML = `
         </main>
     </div>
     
-  <script src="/static/app.bundle.js?v=10"></script>
-  <script src="/static/app.js?v=10"></script>
+  <script src="/static/app.bundle.js?v=12"></script>
+  <script src="/static/app.js?v=12"></script>
 </body>
 </html>
 `;

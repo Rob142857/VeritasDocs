@@ -554,4 +554,77 @@ vdcHandler.get('/ipfs-config', async (c) => {
   }
 });
 
+// Rebuild transaction indexes by scanning all blocks (admin only)
+vdcHandler.post('/rebuild-indexes', async (c) => {
+  try {
+    const user = await authenticateUser(c);
+    if (!user || user.accountType !== 'admin') {
+      return c.json<APIResponse>({ 
+        success: false, 
+        error: 'Admin access required' 
+      }, 403);
+    }
+
+    const env = c.env;
+    const vdc = await initializeVDC(env);
+    
+    console.log('🔧 Starting transaction index rebuild...');
+    
+    let totalBlocks = 0;
+    let totalTransactions = 0;
+    let errors = 0;
+
+    // Scan up to 200 blocks
+    for (let blockNumber = 0; blockNumber < 200; blockNumber++) {
+      const block = await vdc.getBlock(blockNumber);
+      
+      if (!block) {
+        // No more blocks
+        break;
+      }
+      
+      totalBlocks++;
+      console.log(`📦 Indexing block ${blockNumber} (${block.transactions?.length || 0} transactions)...`);
+      
+      if (block.transactions && Array.isArray(block.transactions)) {
+        for (const tx of block.transactions) {
+          try {
+            await env.VERITAS_KV.put(
+              `vdc:tx:${tx.id}`,
+              JSON.stringify({
+                blockNumber: blockNumber,
+                blockHash: block.hash,
+                txId: tx.id,
+                type: tx.type,
+                timestamp: tx.timestamp
+              })
+            );
+            totalTransactions++;
+          } catch (txError) {
+            console.error(`❌ Failed to index tx ${tx.id}:`, txError);
+            errors++;
+          }
+        }
+      }
+    }
+
+    console.log(`✅ Index rebuild complete: ${totalTransactions} transactions indexed across ${totalBlocks} blocks`);
+    
+    return c.json<APIResponse>({
+      success: true,
+      data: {
+        blocksScanned: totalBlocks,
+        transactionsIndexed: totalTransactions,
+        errors: errors
+      }
+    });
+  } catch (error: any) {
+    console.error('Rebuild indexes error:', error);
+    return c.json<APIResponse>({ 
+      success: false, 
+      error: error?.message || 'Failed to rebuild indexes' 
+    }, 500);
+  }
+});
+
 export default vdcHandler;

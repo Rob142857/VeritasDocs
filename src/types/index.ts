@@ -138,6 +138,11 @@ export interface Environment {
   SYSTEM_KEY_ID: string;
   // Precompiled WASM binding configured via wrangler.toml [wasm_modules]
   PQC_WASM?: WebAssembly.Module;
+  // Optional feature flag: auto-mine a block after successful payment
+  AUTO_MINE_ON_PAYMENT?: string;
+  // Stripe price configuration
+  PRICE_CENTS?: string;       // e.g. "2500"
+  PRICE_CURRENCY?: string;    // e.g. "usd"
 }
 
 export interface APIResponse<T = any> {

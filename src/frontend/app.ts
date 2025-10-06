@@ -366,6 +366,12 @@ export async function decryptKeypack(
     const iv = b64uDecode(encrypted.iv);
     const ciphertext = b64uDecode(encrypted.ciphertext);
     
+    console.log('Decrypting keypack:', {
+      saltLength: salt.byteLength,
+      ivLength: iv.byteLength,
+      ciphertextLength: ciphertext.byteLength
+    });
+    
     // Derive AES key from passphrase
     const aesKey = await deriveKeyFromPassphrase(passphrase, salt);
     
@@ -382,8 +388,10 @@ export async function decryptKeypack(
     
     // Decode and parse keypack
     const keypackJson = new TextDecoder().decode(plaintext);
+    console.log('Keypack decrypted successfully');
     return JSON.parse(keypackJson) as Keypack;
   } catch (error) {
+    console.error('Keypack decryption failed:', error);
     throw new Error('Incorrect passphrase or corrupted keypack file');
   }
 }

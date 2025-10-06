@@ -606,14 +606,28 @@ export class VDCBlockchain {
         timestamp: tx.timestamp
       }));
       
-      // Update asset with block number if this is a document/asset creation transaction
+      // Update asset with block number if this is a document/asset creation/registration transaction
       if ((tx.type === 'document_creation' || tx.type === 'asset_transfer' || (tx.type as any) === 'asset_creation') && tx.data?.assetId) {
         const assetData = await this.env.VERITAS_KV.get(`asset:${tx.data.assetId}`);
         if (assetData) {
           const asset = JSON.parse(assetData);
           asset.vdcBlockNumber = blockNumber;
+          asset.status = 'confirmed';
           await this.env.VERITAS_KV.put(`asset:${tx.data.assetId}`, JSON.stringify(asset));
           console.log(`✓ Updated asset ${tx.data.assetId} with block number ${blockNumber}`);
+        }
+      }
+
+      // Handle admin action for asset registration (new flow queued by webhook)
+      if ((tx.type as any) === 'admin_action' && tx.data?.action === 'register_asset' && tx.data?.payload?.assetId) {
+        const aId = tx.data.payload.assetId as string;
+        const assetData = await this.env.VERITAS_KV.get(`asset:${aId}`);
+        if (assetData) {
+          const asset = JSON.parse(assetData);
+          asset.vdcBlockNumber = blockNumber;
+          asset.status = 'confirmed';
+          await this.env.VERITAS_KV.put(`asset:${aId}`, JSON.stringify(asset));
+          console.log(`✓ Registered asset ${aId} on-chain in block ${blockNumber}`);
         }
       }
     }
@@ -739,15 +753,54 @@ export class VDCBlockchain {
    * Get transaction by ID
    */
   async getTransaction(txId: string): Promise<VDCTransaction | null> {
+    // Try transaction index first (fast path)
     const txIndexData = await this.env.VERITAS_KV.get(`vdc:tx:${txId}`);
-    if (!txIndexData) return null;
-
-    const txIndex = JSON.parse(txIndexData);
-    const block = await this.getBlock(txIndex.blockNumber);
     
-    if (!block) return null;
+    if (txIndexData) {
+      const txIndex = JSON.parse(txIndexData);
+      const block = await this.getBlock(txIndex.blockNumber);
+      
+      if (block) {
+        const tx = block.transactions.find(tx => tx.id === txId);
+        if (tx) return tx;
+      }
+    }
 
-    return block.transactions.find(tx => tx.id === txId) || null;
+    // Fallback: scan blocks to find transaction
+    console.warn(`⚠️ Transaction index missing for ${txId}, scanning blocks...`);
+    
+    for (let blockNumber = 0; blockNumber < 200; blockNumber++) {
+      const block = await this.getBlock(blockNumber);
+      
+      if (!block) {
+        // No more blocks exist
+        break;
+      }
+      
+      if (block.transactions) {
+        const tx = block.transactions.find(t => t.id === txId);
+        if (tx) {
+          console.log(`✅ Found transaction ${txId} in block ${blockNumber}`);
+          
+          // Rebuild index for future fast lookups
+          await this.env.VERITAS_KV.put(
+            `vdc:tx:${txId}`,
+            JSON.stringify({
+              blockNumber: blockNumber,
+              blockHash: block.hash,
+              txId: txId,
+              type: tx.type,
+              timestamp: tx.timestamp
+            })
+          );
+          
+          return tx;
+        }
+      }
+    }
+
+    console.error(`❌ Transaction ${txId} not found in any block`);
+    return null;
   }
 
   /**
@@ -1138,6 +1191,130 @@ export class VDCBlockchain {
     }
 
     return { transaction: removed, remainingCount };
+  }
+
+  /**
+   * Mine a block that contains ONLY the specified pending transactions.
+   * Used to guarantee one block per Stripe transaction.
+   */
+  async mineSpecificTransactions(txIds: string[]): Promise<VDCBlock> {
+    if (!txIds || txIds.length === 0) {
+      throw new Error('No transaction IDs provided');
+    }
+
+    const bucket = this.storageBucket;
+    const selected: VDCTransaction[] = [];
+
+    for (const txId of txIds) {
+      let tx: VDCTransaction | null = null;
+
+      if (bucket) {
+        const key = this.getPendingKey(txId);
+        const obj = await bucket.get(key);
+        if (obj) {
+          tx = await this.parsePendingTransactionObject(obj);
+        }
+      }
+
+      if (!tx) {
+        const kvKey = `vdc:pending:${txId}`;
+        const legacy = await this.env.VERITAS_KV.get(kvKey);
+        if (legacy) {
+          try { tx = JSON.parse(legacy) as VDCTransaction; } catch {}
+        }
+      }
+
+      if (!tx) {
+        throw new Error(`Pending transaction not found: ${txId}`);
+      }
+      selected.push(tx);
+    }
+
+    // Get previous block
+    const latestData = await this.env.VERITAS_KV.get('vdc:latest');
+    if (!latestData) {
+      throw new Error('No latest block found - create genesis first');
+    }
+
+    const latest = JSON.parse(latestData);
+    const blockNumber = latest.blockNumber + 1;
+    const timestamp = Date.now();
+
+    const block: VDCBlock = {
+      blockNumber,
+      timestamp,
+      previousHash: latest.hash,
+      hash: '',
+      transactions: selected,
+      merkleRoot: this.calculateMerkleRoot(selected),
+      blockSignature: {
+        publicKey: this.env.SYSTEM_DILITHIUM_PUBLIC_KEY,
+        signature: '',
+        keyVersion: parseInt(this.env.SYSTEM_KEY_VERSION || '1')
+      }
+    };
+
+    block.hash = await this.calculateBlockHash(block);
+
+    const blockDataToSign = {
+      blockNumber,
+      timestamp,
+      previousHash: latest.hash,
+      hash: block.hash,
+      merkleRoot: block.merkleRoot,
+      transactionCount: selected.length
+    };
+
+    block.blockSignature.signature = await this.maataraClient.signData(
+      JSON.stringify(blockDataToSign),
+      getSystemDilithiumPrivateKey(this.env)
+    );
+
+    const finalBlock = await this.persistBlock(block, { type: 'standard' });
+
+    await this.env.VERITAS_KV.put('vdc:latest', JSON.stringify({
+      blockNumber,
+      hash: finalBlock.hash,
+      ipfsHash: finalBlock.ipfsHash,
+      timestamp
+    }));
+
+    // Index and update assets
+    for (const tx of selected) {
+      await this.env.VERITAS_KV.put(`vdc:tx:${tx.id}`, JSON.stringify({
+        blockNumber,
+        txId: tx.id,
+        type: tx.type,
+        timestamp: tx.timestamp
+      }));
+
+      if ((tx.type as any) === 'admin_action' && tx.data?.action === 'register_asset' && tx.data?.payload?.assetId) {
+        const aId = tx.data.payload.assetId as string;
+        const assetData = await this.env.VERITAS_KV.get(`asset:${aId}`);
+        if (assetData) {
+          const asset = JSON.parse(assetData);
+          asset.vdcBlockNumber = blockNumber;
+          asset.status = 'confirmed';
+          await this.env.VERITAS_KV.put(`asset:${aId}`, JSON.stringify(asset));
+        }
+      }
+    }
+
+    // Remove ONLY selected pending transactions
+    if (bucket) {
+      for (const txId of txIds) {
+        await bucket.delete(this.getPendingKey(txId));
+      }
+    }
+    for (const txId of txIds) {
+      await this.env.VERITAS_KV.delete(`vdc:pending:${txId}`);
+    }
+
+    // Update pending count approximately
+    const remaining = await this.fetchPendingTransactions();
+    await this.env.VERITAS_KV.put('vdc:pending:count', remaining.length.toString());
+
+    return finalBlock;
   }
 
   /**

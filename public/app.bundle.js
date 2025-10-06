@@ -889,6 +889,11 @@
       const salt = b64uDecode(encrypted.salt);
       const iv = b64uDecode(encrypted.iv);
       const ciphertext = b64uDecode(encrypted.ciphertext);
+      console.log("Decrypting keypack:", {
+        saltLength: salt.byteLength,
+        ivLength: iv.byteLength,
+        ciphertextLength: ciphertext.byteLength
+      });
       const aesKey = await deriveKeyFromPassphrase(passphrase, salt);
       const plaintext = await crypto.subtle.decrypt(
         {
@@ -900,8 +905,10 @@
         ciphertext
       );
       const keypackJson = new TextDecoder().decode(plaintext);
+      console.log("Keypack decrypted successfully");
       return JSON.parse(keypackJson);
     } catch (error) {
+      console.error("Keypack decryption failed:", error);
       throw new Error("Incorrect passphrase or corrupted keypack file");
     }
   }

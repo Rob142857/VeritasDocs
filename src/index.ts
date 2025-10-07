@@ -1221,6 +1221,31 @@ class VeritasApp {
       case 'docs':
         path = '/docs';
         break;
+      case 'docs-veritas-documents-chain':
+        this.currentPage = 'docs';
+        this.renderDocs();
+        this.showDocViewer('veritas-documents-chain');
+        return;
+      case 'docs-ethereum-root':
+        this.currentPage = 'docs';
+        this.renderDocs();
+        this.showDocViewer('ethereum-root');
+        return;
+      case 'docs-maatara-core':
+        this.currentPage = 'docs';
+        this.renderDocs();
+        this.showDocViewer('maatara-core');
+        return;
+      case 'docs-user-how-to':
+        this.currentPage = 'docs';
+        this.renderDocs();
+        this.showDocViewer('user-how-to');
+        return;
+      case 'docs-technical-information':
+        this.currentPage = 'docs';
+        this.renderDocs();
+        this.showDocViewer('technical-information');
+        return;
       case 'admin':
         path = '/admin';
         break;
@@ -1240,10 +1265,100 @@ class VeritasApp {
     if (this.currentUser) {
       const isAdmin = this.currentUser.accountType === 'admin';
       const adminLink = isAdmin ? \`<a href="#" data-nav="admin" class="\${this.currentPage === 'admin' ? 'active' : ''}" style="color: #f59e0b;">⚙️ Admin</a>\` : '';
-      nav.innerHTML = \`<a href="#" data-nav="dashboard" class="\${this.currentPage === 'dashboard' ? 'active' : ''}">Dashboard</a><a href="#" data-nav="create-asset" class="\${this.currentPage === 'create-asset' ? 'active' : ''}">Register Document</a><a href="#" data-nav="search" class="\${this.currentPage === 'search' ? 'active' : ''}">Search</a><a href="#" data-nav="docs" class="\${this.currentPage === 'docs' ? 'active' : ''}">Docs</a>\${adminLink}<a href="#" data-nav="logout">Logout</a>\`;
+      nav.innerHTML = \`<a href="#" data-nav="dashboard" class="\${this.currentPage === 'dashboard' ? 'active' : ''}">Dashboard</a><a href="#" data-nav="create-asset" class="\${this.currentPage === 'create-asset' ? 'active' : ''}">Register Document</a><a href="#" data-nav="search" class="\${this.currentPage === 'search' ? 'active' : ''}">Search</a><div class="nav-dropdown"><button class="nav-dropdown-btn \${this.currentPage === 'docs' ? 'active' : ''}">Docs ▼</button><div class="nav-dropdown-content"><a href="#" data-nav="docs-veritas-documents-chain">Veritas Documents Chain</a><a href="#" data-nav="docs-ethereum-root">Ethereum Root</a><a href="#" data-nav="docs-maatara-core">Ma'atara Core</a><a href="#" data-nav="docs-user-how-to">User How-To</a><a href="#" data-nav="docs-technical-information">Technical Information</a></div></div>\${adminLink}<a href="#" data-nav="logout">Logout</a>\`;
     } else {
-      nav.innerHTML = \`<a href="#" data-nav="search" class="\${this.currentPage === 'search' ? 'active' : ''}">Search</a><a href="#" data-nav="docs" class="\${this.currentPage === 'docs' ? 'active' : ''}">Docs</a>\`;
+      nav.innerHTML = \`<a href="#" data-nav="search" class="\${this.currentPage === 'search' ? 'active' : ''}">Search</a><div class="nav-dropdown"><button class="nav-dropdown-btn \${this.currentPage === 'docs' ? 'active' : ''}">Docs ▼</button><div class="nav-dropdown-content"><a href="#" data-nav="docs-veritas-documents-chain">Veritas Documents Chain</a><a href="#" data-nav="docs-ethereum-root">Ethereum Root</a><a href="#" data-nav="docs-maatara-core">Ma'atara Core</a><a href="#" data-nav="docs-user-how-to">User How-To</a><a href="#" data-nav="docs-technical-information">Technical Information</a></div></div>\`;
     }
+
+    // Add dropdown styles if not present
+    if (!document.getElementById('nav-dropdown-styles')) {
+      const style = document.createElement('style');
+      style.id = 'nav-dropdown-styles';
+      style.textContent = \`
+        .nav-dropdown {
+          position: relative;
+          display: inline-block;
+        }
+        .nav-dropdown-btn {
+          background: none;
+          border: none;
+          color: #64748b;
+          cursor: pointer;
+          padding: 0.5rem 1rem;
+          font-size: 1rem;
+          transition: color 0.2s;
+        }
+        .nav-dropdown-btn:hover, .nav-dropdown-btn.active {
+          color: #2563eb;
+        }
+        .nav-dropdown-content {
+          display: none;
+          position: absolute;
+          background: white;
+          min-width: 200px;
+          box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+          border-radius: 8px;
+          z-index: 1000;
+          border: 1px solid #e5e7eb;
+          top: 100%;
+          left: 0;
+        }
+        .nav-dropdown.open .nav-dropdown-content {
+          display: block;
+        }
+        .nav-dropdown-content a {
+          color: #374151;
+          padding: 0.75rem 1rem;
+          text-decoration: none;
+          display: block;
+          border-bottom: 1px solid #f3f4f6;
+          transition: background-color 0.2s;
+        }
+        .nav-dropdown-content a:hover {
+          background: #f8fafc;
+        }
+        .nav-dropdown-content a:last-child {
+          border-bottom: none;
+        }
+        @media (max-width: 768px) {
+          .nav-dropdown-content {
+            position: static;
+            display: none;
+            box-shadow: none;
+            border: none;
+            background: #f8fafc;
+            margin-top: 0.5rem;
+          }
+          .nav-dropdown.open .nav-dropdown-content {
+            display: block;
+          }
+        }
+      \`;
+      document.head.appendChild(style);
+    }
+
+    // Add click handler for dropdown toggle
+    const dropdownBtns = nav.querySelectorAll('.nav-dropdown-btn');
+    dropdownBtns.forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        const dropdown = btn.parentElement;
+        const isOpen = dropdown.classList.contains('open');
+        // Close all dropdowns first
+        document.querySelectorAll('.nav-dropdown').forEach(d => d.classList.remove('open'));
+        // Toggle this one
+        if (!isOpen) {
+          dropdown.classList.add('open');
+        }
+      });
+    });
+
+    // Close dropdown when clicking outside
+    document.addEventListener('click', (e) => {
+      if (!e.target.closest('.nav-dropdown')) {
+        document.querySelectorAll('.nav-dropdown').forEach(d => d.classList.remove('open'));
+      }
+    });
   }
 
   renderLogin() {
@@ -1773,7 +1888,20 @@ class VeritasApp {
   }
 
   async showDocViewer(slug) {
-    const content = document.getElementById('docs-content');
+    let content = document.getElementById('docs-content');
+    
+    // If docs-content doesn't exist, render the docs page first
+    if (!content) {
+      this.renderDocs();
+      // Wait a bit for DOM to update
+      await new Promise(resolve => setTimeout(resolve, 100));
+      content = document.getElementById('docs-content');
+    }
+    
+    if (!content) {
+      console.error('Failed to find or create docs-content element');
+      return;
+    }
     
     // Show loading state
     content.innerHTML = [

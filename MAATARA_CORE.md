@@ -1,19 +1,26 @@
-# Ma'atara Core - The Future of Online Security
+# Ma'atara Core - The Foundational Framework
 
 **Version**: 1.1.0  
 **Last Updated**: October 3, 2025  
-**Audience**: Users, Technology Enthusiasts  
+**Audience**: Users, Technology Enthusiasts, Developers  
 **Category**: User Guide  
-**Summary**: User-friendly explanation of Ma'atara Core's unique functions and how it will change the future of online security and data operations.  
-**Keywords**: cryptography, post-quantum, security, future, innovation
+**Summary**: Ma'atara Core is the powerful post-quantum cryptography framework that provides the nuts, bolts, principles, and data structures on which Veritas Documents is built.  
+**Keywords**: cryptography, post-quantum, security, framework, toolkit, foundation
 
 ---
 
 ## 🌟 What is Ma'atara Core?
 
-**Ma'atara Core** is a revolutionary **post-quantum cryptography toolkit** that represents the cutting edge of online security. While most security systems are scrambling to catch up with quantum computing threats, Ma'atara was built from the ground up to be **quantum-resistant**.
+**Ma'atara Core** is a comprehensive **post-quantum cryptography framework** - the powerful foundation and toolkit that Veritas Documents is built upon. Think of it as the **strong, reliable big brother** providing all the essential components, developer-friendly tools, and cryptographic building blocks.
 
-Think of it as the **next generation of internet security** - designed not just for today's computers, but for the quantum computers of tomorrow.
+While Veritas Documents provides the user-facing legal document storage platform, **Ma'atara Core provides the underlying framework**: the encryption algorithms, signature schemes, data structures, and security principles that make everything work.
+
+**Key Positioning:**
+- **Ma'atara Core** = The foundational framework and toolkit (nuts, bolts, gears, principles)
+- **Veritas Documents** = The application built on top of Ma'atara Core
+- **Relationship** = Veritas leverages Ma'atara's powerful cryptographic capabilities
+
+**Official Ma'atara Core Documentation:** [https://maatara-core-worker.rme-6e5.workers.dev/site](https://maatara-core-worker.rme-6e5.workers.dev/site)
 
 ---
 

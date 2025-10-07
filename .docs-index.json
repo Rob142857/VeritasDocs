@@ -172,5 +172,95 @@
     "priority": 99,
     "title": "Veritas Documents - Quick Reference Guide\r",
     "keywords": []
+  },
+  {
+    "slug": "VERITAS_DOCUMENTS_CHAIN",
+    "file": "VERITAS_DOCUMENTS_CHAIN.md",
+    "version": "1.1.0",
+    "lastUpdated": "October 3, 2025",
+    "status": "Production",
+    "audience": "Users, Legal Professionals",
+    "category": "User Guide",
+    "priority": 99,
+    "title": "Veritas Documents Chain - User Guide\r",
+    "keywords": [
+      "blockchain",
+      "documents",
+      "security",
+      "storage",
+      "user-guide"
+    ]
+  },
+  {
+    "slug": "ETHEREUM_ROOT",
+    "file": "ETHEREUM_ROOT.md",
+    "version": "1.1.0",
+    "lastUpdated": "October 3, 2025",
+    "status": "Production",
+    "audience": "Users, Legal Professionals",
+    "category": "User Guide",
+    "priority": 99,
+    "title": "Ethereum Root - User Guide\r",
+    "keywords": [
+      "ethereum",
+      "merkle",
+      "integrity",
+      "anchoring",
+      "blockchain"
+    ]
+  },
+  {
+    "slug": "MAATARA_CORE",
+    "file": "MAATARA_CORE.md",
+    "version": "1.1.0",
+    "lastUpdated": "October 3, 2025",
+    "status": "Production",
+    "audience": "Users, Technology Enthusiasts",
+    "category": "User Guide",
+    "priority": 99,
+    "title": "Ma'atara Core - The Future of Online Security\r",
+    "keywords": [
+      "cryptography",
+      "post-quantum",
+      "security",
+      "future",
+      "innovation"
+    ]
+  },
+  {
+    "slug": "USER_HOW_TO",
+    "file": "USER_HOW_TO.md",
+    "version": "1.1.0",
+    "lastUpdated": "October 3, 2025",
+    "status": "Production",
+    "audience": "New Users, Standard Users",
+    "category": "User Guide",
+    "priority": 99,
+    "title": "How to Use Veritas Documents - Complete User Guide\r",
+    "keywords": [
+      "user-guide",
+      "how-to",
+      "activation",
+      "documents",
+      "assets"
+    ]
+  },
+  {
+    "slug": "TECHNICAL_INFORMATION",
+    "file": "TECHNICAL_INFORMATION.md",
+    "version": "1.1.0",
+    "lastUpdated": "October 3, 2025",
+    "status": "Production",
+    "audience": "Technical Stakeholders, Developers, Legal",
+    "category": "Technical Reference",
+    "priority": 1,
+    "title": "Technical Information - Veritas Documents\r",
+    "keywords": [
+      "technical",
+      "architecture",
+      "security",
+      "blockchain",
+      "implementation"
+    ]
   }
 ]

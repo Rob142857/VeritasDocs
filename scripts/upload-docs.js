@@ -20,6 +20,12 @@ const DOC_FILES = [
   'TECHNICAL_STATUS.md',
   'ACTIVATION_TOKEN_FLOW.md',
   'QUICK_REFERENCE.md',
+  // New user-facing documentation
+  'VERITAS_DOCUMENTS_CHAIN.md',
+  'ETHEREUM_ROOT.md',
+  'MAATARA_CORE.md',
+  'USER_HOW_TO.md',
+  'TECHNICAL_INFORMATION.md',
 ].filter((f) => fs.existsSync(path.join(ROOT, f)));
 
 // KV namespace id (production) — fallback to env var if provided

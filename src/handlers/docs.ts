@@ -15,105 +15,58 @@ type DocCatalogEntry = {
 };
 
 const DOCS_CATALOG: Record<string, DocCatalogEntry> = {
-  'getting-started': {
-    file: 'README.md',
-    title: '🚀 Getting Started',
+  // User-Facing Documentation
+  'veritas-documents-chain': {
+    file: 'VERITAS_DOCUMENTS_CHAIN.md',
+    title: '⛓️ Veritas Documents Chain',
     category: 'User Guide',
     audience: 'users',
     priority: 1,
     description:
-      'Welcome to Veritas Documents! Learn how to create your account, store legal documents securely, and understand our zero-knowledge architecture.',
-    keywords: ['introduction', 'overview', 'quick start', 'welcome'],
+      'Understand the Veritas Documents Chain (VDC) - our custom blockchain that securely stores your legal documents with post-quantum cryptography and multi-layer verification.',
+    keywords: ['blockchain', 'vdc', 'security', 'storage', 'cryptography'],
   },
-  'security-guardrails': {
-    file: 'SECURITY_GUARDRAILS.md',
-    title: '🔐 Security & Key Management',
+  'ethereum-root': {
+    file: 'ETHEREUM_ROOT.md',
+    title: '🌐 Ethereum Root Anchoring',
     category: 'User Guide',
     audience: 'users',
     priority: 2,
     description:
-      'Critical information about managing your private keys, account activation, and understanding why your keys are secure. Read this before activating your account!',
-    keywords: ['keys', 'security', 'activation', 'backup', 'safety'],
+      'Learn how Veritas anchors document proofs to Ethereum for independent verification, ensuring your documents remain provably authentic forever.',
+    keywords: ['ethereum', 'anchoring', 'verification', 'proof', 'transparency'],
   },
-  'activation-flow': {
-    file: 'ACTIVATION_TOKEN_FLOW.md',
-    title: '✅ Account Activation Guide',
+  'maatara-core': {
+    file: 'MAATARA_CORE.md',
+    title: '🔐 Ma\'atara Core Technology',
     category: 'User Guide',
     audience: 'users',
     priority: 3,
     description:
-      'Step-by-step guide to activating your Veritas account, generating your cryptographic keys, and securely storing your credentials.',
-    keywords: ['activation', 'signup', 'registration', 'onboarding'],
+      'Discover Ma\'atara Core - the revolutionary post-quantum cryptography toolkit that powers Veritas and will transform online security worldwide.',
+    keywords: ['maatara', 'cryptography', 'post-quantum', 'security', 'innovation'],
   },
-  'security-architecture': {
-    file: 'SECURITY_ARCHITECTURE.md',
-    title: '🛡️ Security Architecture',
-    category: 'Architecture',
-    audience: 'developers',
+  'user-how-to': {
+    file: 'USER_HOW_TO.md',
+    title: '� How to Use Veritas Documents',
+    category: 'User Guide',
+    audience: 'users',
     priority: 4,
     description:
-      'Comprehensive security design including cryptographic flows, threat modeling, key management strategies, and zero-knowledge proofs.',
-    keywords: ['security', 'architecture', 'cryptography', 'threats', 'design'],
+      'Complete step-by-step guide: from account activation to creating, storing, and verifying your legal documents with quantum-resistant security.',
+    keywords: ['guide', 'tutorial', 'activation', 'documents', 'verification'],
   },
-  'zero-knowledge': {
-    file: 'ZERO_KNOWLEDGE_ARCHITECTURE.md',
-    title: '🔒 Zero-Knowledge Architecture',
-    category: 'Architecture',
+
+  // Technical Documentation (Consolidated)
+  'technical-information': {
+    file: 'TECHNICAL_INFORMATION.md',
+    title: '⚙️ Technical Information',
+    category: 'Technical',
     audience: 'developers',
     priority: 5,
     description:
-      'Deep dive into our zero-knowledge security model, machine identities, split secret architecture, and why your private keys never touch our servers.',
-    keywords: ['zero-knowledge', 'privacy', 'encryption', 'machine identity', 'system keys'],
-  },
-  'blockchain-architecture': {
-    file: 'BLOCKCHAIN_ARCHITECTURE.md',
-    title: '⛓️ VDC Blockchain Architecture',
-    category: 'Architecture',
-    audience: 'developers',
-    priority: 6,
-    description:
-      'Design and architecture of the Veritas Documents Chain (VDC), our custom blockchain with dual signatures and post-quantum cryptography.',
-    keywords: ['blockchain', 'vdc', 'consensus', 'transactions', 'merkle'],
-  },
-  'vdc-integration': {
-    file: 'VDC_INTEGRATION_GUIDE.md',
-    title: '🔧 VDC Integration Guide',
-    category: 'Developer Guide',
-    audience: 'developers',
-    priority: 7,
-    description:
-      'Developer guide for integrating with the VDC blockchain, including API reference, code examples, and verification methods.',
-    keywords: ['integration', 'api', 'blockchain', 'development', 'code examples'],
-  },
-  'quick-reference': {
-    file: 'QUICK_REFERENCE.md',
-    title: '📖 Developer Quick Reference',
-    category: 'Developer Guide',
-    audience: 'developers',
-    priority: 8,
-    description:
-      'Command reference, API endpoints, data models, cryptography usage, and troubleshooting guide for developers.',
-    keywords: ['reference', 'commands', 'api', 'troubleshooting', 'cheatsheet'],
-  },
-  'technical-status': {
-    file: 'TECHNICAL_STATUS.md',
-    title: '📊 Technical Status',
-    category: 'Developer Guide',
-    audience: 'developers',
-    priority: 9,
-    description:
-      'Current implementation status, completed features, known issues, and production deployment information.',
-    keywords: ['status', 'progress', 'implementation', 'production', 'deployment'],
-  },
-  'development-plan': {
-    file: 'DEVELOPMENT_PLAN.md',
-    title: '🗺️ Development Roadmap',
-    category: 'Developer Guide',
-    audience: 'developers',
-    priority: 10,
-    description:
-      'Project roadmap, completed features, planned enhancements, and future development phases.',
-    keywords: ['roadmap', 'planning', 'features', 'future', 'milestones'],
+      'Comprehensive technical documentation including security architecture, blockchain design, API references, and implementation details.',
+    keywords: ['technical', 'architecture', 'api', 'security', 'implementation'],
   },
 } satisfies Record<string, DocCatalogEntry>;
 
@@ -170,30 +123,34 @@ function renderDocsIndex(
       <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
-          font-family: 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+          font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, Roboto, sans-serif;
           background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
           color: #111827;
           line-height: 1.6;
-          padding: 2rem;
+          padding: 1rem;
         }
         .container {
-          max-width: 1120px;
+          max-width: 1200px;
           margin: 0 auto;
         }
         .header {
           text-align: center;
           color: #fff;
           margin-bottom: 3rem;
+          padding: 2rem 1rem;
         }
         .header h1 {
-          font-size: 3rem;
-          font-weight: 700;
-          margin-bottom: 0.75rem;
+          font-size: clamp(2rem, 5vw, 3.5rem);
+          font-weight: 800;
+          margin-bottom: 1rem;
           text-shadow: 0 12px 24px rgba(17, 24, 39, 0.25);
+          letter-spacing: -0.025em;
         }
         .header p {
-          font-size: 1.25rem;
+          font-size: clamp(1rem, 2.5vw, 1.25rem);
           opacity: 0.9;
+          max-width: 600px;
+          margin: 0 auto;
         }
         .section {
           background: #fff;
@@ -214,11 +171,13 @@ function renderDocsIndex(
         .section-subtitle {
           color: #4b5563;
           margin-bottom: 1.75rem;
+          font-size: 1.1rem;
+          line-height: 1.6;
         }
         .doc-grid {
           display: grid;
           gap: 1.5rem;
-          grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+          grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
         }
         .doc-card {
           border: 1px solid #e5e7eb;
@@ -227,27 +186,44 @@ function renderDocsIndex(
           text-decoration: none;
           color: inherit;
           display: block;
-          transition: transform 0.25s ease, box-shadow 0.25s ease;
+          transition: all 0.25s ease;
           background: #fff;
+          position: relative;
+          overflow: hidden;
+        }
+        .doc-card::before {
+          content: '';
+          position: absolute;
+          top: 0;
+          left: 0;
+          right: 0;
+          height: 4px;
+          background: linear-gradient(90deg, #667eea, #764ba2);
+          opacity: 0;
+          transition: opacity 0.25s ease;
         }
         .doc-card:hover {
           transform: translateY(-4px);
           box-shadow: 0 16px 32px rgba(99, 102, 241, 0.15);
           border-color: #6366f1;
         }
+        .doc-card:hover::before {
+          opacity: 1;
+        }
         .doc-card-title {
           display: flex;
           align-items: center;
-          gap: 0.5rem;
+          gap: 0.75rem;
           font-size: 1.25rem;
           font-weight: 600;
-          margin-bottom: 0.5rem;
+          margin-bottom: 0.75rem;
           color: #1f2937;
         }
         .doc-card-desc {
           color: #6b7280;
           font-size: 0.95rem;
           margin-bottom: 1rem;
+          line-height: 1.5;
         }
         .doc-card-meta {
           display: flex;
@@ -273,14 +249,67 @@ function renderDocsIndex(
           text-align: center;
           color: #e0e7ff;
           margin-top: 3rem;
+          padding: 2rem 1rem;
         }
         .footer a {
           color: #f9fafb;
-          text-decoration: underline;
+          text-decoration: none;
+          border-bottom: 1px solid #93c5fd;
+          padding-bottom: 2px;
+          transition: color 0.2s ease;
+        }
+        .footer a:hover {
+          color: #dbeafe;
+        }
+        .hero-section {
+          background: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%);
+          border-radius: 20px;
+          padding: 3rem 2rem;
+          text-align: center;
+          margin-bottom: 2rem;
+          border: 1px solid #e5e7eb;
+        }
+        .hero-title {
+          font-size: clamp(1.5rem, 4vw, 2.5rem);
+          font-weight: 700;
+          color: #0f172a;
+          margin-bottom: 1rem;
+        }
+        .hero-subtitle {
+          font-size: 1.1rem;
+          color: #475569;
+          max-width: 700px;
+          margin: 0 auto 2rem;
+          line-height: 1.6;
+        }
+        .hero-stats {
+          display: flex;
+          justify-content: center;
+          gap: 2rem;
+          flex-wrap: wrap;
+        }
+        .stat {
+          text-align: center;
+        }
+        .stat-number {
+          font-size: 2rem;
+          font-weight: 800;
+          color: #4338ca;
+          display: block;
+        }
+        .stat-label {
+          font-size: 0.9rem;
+          color: #6b7280;
+          text-transform: uppercase;
+          letter-spacing: 0.05em;
         }
         @media (max-width: 640px) {
-          body { padding: 1.5rem; }
-          .header h1 { font-size: 2.25rem; }
+          body { padding: 0.5rem; }
+          .header { padding: 1rem 0.5rem; margin-bottom: 2rem; }
+          .section { padding: 1.5rem; }
+          .doc-grid { grid-template-columns: 1fr; }
+          .hero-stats { gap: 1rem; }
+          .stat-number { font-size: 1.5rem; }
         }
       </style>
     </head>
@@ -288,13 +317,36 @@ function renderDocsIndex(
       <div class="container">
         <header class="header">
           <h1>📚 Veritas Documentation</h1>
-          <p>Zero-knowledge legal document storage secured by post-quantum cryptography.</p>
+          <p>Secure legal document storage powered by post-quantum cryptography</p>
         </header>
 
+        <section class="hero-section">
+          <h2 class="hero-title">Zero-Knowledge Security for Legal Documents</h2>
+          <p class="hero-subtitle">
+            Veritas Documents combines cutting-edge post-quantum cryptography with blockchain technology
+            to provide unparalleled security and transparency for your legal documents.
+          </p>
+          <div class="hero-stats">
+            <div class="stat">
+              <span class="stat-number">PQC</span>
+              <span class="stat-label">Quantum Resistant</span>
+            </div>
+            <div class="stat">
+              <span class="stat-number">IPFS</span>
+              <span class="stat-label">Distributed Storage</span>
+            </div>
+            <div class="stat">
+              <span class="stat-number">ETH</span>
+              <span class="stat-label">Blockchain Anchored</span>
+            </div>
+          </div>
+        </section>
+
         <section class="section">
-          <h2 class="section-title">👥 User Documentation</h2>
+          <h2 class="section-title">👥 User Guide</h2>
           <p class="section-subtitle">
-            Start here if you're new to Veritas Documents or need help with account setup and security best practices.
+            Everything you need to know about using Veritas Documents securely.
+            Start here to understand our technology and how to protect your legal documents.
           </p>
           <div class="doc-grid">
             ${renderDocCards(userDocs, 'badge-user', 'User Guide')}
@@ -302,28 +354,27 @@ function renderDocsIndex(
         </section>
 
         <section class="section">
-          <h2 class="section-title">💻 Developer Documentation</h2>
+          <h2 class="section-title">⚙️ Technical Documentation</h2>
           <p class="section-subtitle">
-            Technical architecture, API references, and integration guides for engineers and system administrators.
+            Detailed technical information for developers, system administrators, and security researchers.
           </p>
           <div class="doc-grid">
-            ${renderDocCards(developerDocs, 'badge-dev', 'Developer')}
+            ${renderDocCards(developerDocs, 'badge-dev', 'Technical')}
           </div>
         </section>
 
         <footer class="footer">
           <p><strong>Veritas Documents</strong> · Version 1.0.1 · Production</p>
           <p>
-            <a href="/">Return to Application</a> ·
-            <a href="/docs/api">API Reference</a>
+            <a href="/">Return to Application</a> · 
+            <a href="/docs/api">API Reference</a> · 
+            <a href="https://github.com/Rob142857/VeritasDocs">GitHub</a>
           </p>
         </footer>
       </div>
     </body>
   </html>`;
-}
-
-docsHandler.get('/', async (c) => {
+}docsHandler.get('/', async (c) => {
   const env = c.env;
   const docs = Object.entries(DOCS_CATALOG);
   let userDocs = docs

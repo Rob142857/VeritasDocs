@@ -1526,21 +1526,12 @@ class VeritasApp {
     const content = document.getElementById('content');
     content.innerHTML = [
       '<div class="docs-container">',
-      '  <div class="docs-sidebar">',
-      '    <h3 class="docs-sidebar-title">📚 Documentation</h3>',
-      '    <nav class="docs-nav">',
-      '      <a href="#" class="docs-nav-link active" data-doc="README">README</a>',
-      '      <a href="#" class="docs-nav-link" data-doc="ZERO_KNOWLEDGE_ARCHITECTURE">Zero-Knowledge Architecture</a>',
-      '      <a href="#" class="docs-nav-link" data-doc="VDC_INTEGRATION_GUIDE">VDC Integration Guide</a>',
-      '      <a href="#" class="docs-nav-link" data-doc="DEVELOPMENT_PLAN">Development Plan</a>',
-      '      <a href="#" class="docs-nav-link" data-doc="TECHNICAL_STATUS">Technical Status</a>',
-      '      <a href="#" class="docs-nav-link" data-doc="SECURITY_GUARDRAILS">Security Guardrails</a>',
-      '    </nav>',
+      '  <div class="docs-header">',
+      '    <h1 class="docs-title">📚 Documentation</h1>',
+      '    <p class="docs-subtitle">Secure legal document storage powered by post-quantum cryptography</p>',
       '  </div>',
-      '  <div class="docs-content">',
-      '    <div id="doc-viewer" class="doc-viewer">',
-      '      <div class="loading">Loading documentation...</div>',
-      '    </div>',
+      '  <div id="docs-content" class="docs-content">',
+      '    <div class="loading"><div class="spinner"></div><p>Loading documentation...</p></div>',
       '  </div>',
       '</div>'
     ].join('');
@@ -1551,168 +1542,386 @@ class VeritasApp {
       style.id = 'docs-styles';
       style.textContent = [
         '.docs-container {',
-        '  display: grid;',
-        '  grid-template-columns: 280px 1fr;',
-        '  gap: 2rem;',
-        '  max-width: 1400px;',
+        '  max-width: 1200px;',
+        '  margin: 0 auto;',
+        '  padding: 2rem 1rem;',
+        '}',
+        '',
+        '.docs-header {',
+        '  text-align: center;',
+        '  margin-bottom: 3rem;',
+        '}',
+        '',
+        '.docs-title {',
+        '  font-size: clamp(2rem, 5vw, 3rem);',
+        '  font-weight: 800;',
+        '  color: #0f172a;',
+        '  margin-bottom: 1rem;',
+        '  letter-spacing: -0.025em;',
+        '}',
+        '',
+        '.docs-subtitle {',
+        '  font-size: clamp(1rem, 2.5vw, 1.25rem);',
+        '  color: #64748b;',
+        '  max-width: 600px;',
         '  margin: 0 auto;',
         '}',
         '',
-        '.docs-sidebar {',
-        '  background: var(--surface);',
-        '  border-radius: 8px;',
-        '  padding: 1.5rem;',
-        '  height: fit-content;',
-        '  position: sticky;',
-        '  top: 2rem;',
+        '.docs-content {',
+        '  min-height: 400px;',
         '}',
         '',
-        '.docs-sidebar-title {',
-        '  margin: 0 0 1rem 0;',
-        '  font-size: 1.25rem;',
-        '  color: var(--text-primary);',
+        '.docs-sections {',
+        '  display: grid;',
+        '  gap: 2rem;',
         '}',
         '',
-        '.docs-nav {',
+        '.docs-section {',
+        '  background: #fff;',
+        '  border-radius: 16px;',
+        '  padding: 2rem;',
+        '  box-shadow: 0 4px 6px rgba(0,0,0,0.05);',
+        '  border: 1px solid #e5e7eb;',
+        '}',
+        '',
+        '.docs-section-title {',
+        '  font-size: 1.5rem;',
+        '  font-weight: 700;',
+        '  color: #1f2937;',
+        '  margin-bottom: 0.5rem;',
         '  display: flex;',
-        '  flex-direction: column;',
+        '  align-items: center;',
         '  gap: 0.5rem;',
         '}',
         '',
-        '.docs-nav-link {',
-        '  padding: 0.75rem 1rem;',
-        '  color: var(--text-secondary);',
+        '.docs-section-subtitle {',
+        '  color: #6b7280;',
+        '  margin-bottom: 1.5rem;',
+        '  font-size: 1rem;',
+        '  line-height: 1.5;',
+        '}',
+        '',
+        '.docs-grid {',
+        '  display: grid;',
+        '  gap: 1rem;',
+        '  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));',
+        '}',
+        '',
+        '.doc-card {',
+        '  border: 1px solid #e5e7eb;',
+        '  border-radius: 12px;',
+        '  padding: 1.5rem;',
         '  text-decoration: none;',
-        '  border-radius: 6px;',
-        '  transition: all 0.2s;',
-        '  font-size: 0.95rem;',
+        '  color: inherit;',
+        '  display: block;',
+        '  transition: all 0.2s ease;',
+        '  background: #fff;',
+        '  position: relative;',
+        '  overflow: hidden;',
         '}',
         '',
-        '.docs-nav-link:hover {',
-        '  background: var(--background);',
-        '  color: var(--primary-color);',
+        '.doc-card::before {',
+        '  content: "";',
+        '  position: absolute;',
+        '  top: 0;',
+        '  left: 0;',
+        '  right: 0;',
+        '  height: 3px;',
+        '  background: linear-gradient(90deg, #667eea, #764ba2);',
+        '  opacity: 0;',
+        '  transition: opacity 0.2s ease;',
         '}',
         '',
-        '.docs-nav-link.active {',
-        '  background: var(--primary-color);',
-        '  color: white;',
-        '  font-weight: 500;',
+        '.doc-card:hover {',
+        '  transform: translateY(-2px);',
+        '  box-shadow: 0 8px 25px rgba(0,0,0,0.1);',
+        '  border-color: #667eea;',
         '}',
         '',
-        '.docs-content {',
-        '  background: white;',
-        '  border-radius: 8px;',
-        '  padding: 2.5rem;',
-        '  box-shadow: 0 1px 3px rgba(0,0,0,0.1);',
-        '  min-height: 600px;',
+        '.doc-card:hover::before {',
+        '  opacity: 1;',
+        '}',
+        '',
+        '.doc-card-title {',
+        '  font-size: 1.125rem;',
+        '  font-weight: 600;',
+        '  margin-bottom: 0.5rem;',
+        '  color: #1f2937;',
+        '  display: flex;',
+        '  align-items: center;',
+        '  gap: 0.5rem;',
+        '}',
+        '',
+        '.doc-card-desc {',
+        '  color: #6b7280;',
+        '  font-size: 0.875rem;',
+        '  line-height: 1.4;',
+        '  margin-bottom: 1rem;',
+        '}',
+        '',
+        '.doc-card-meta {',
+        '  display: flex;',
+        '  justify-content: space-between;',
+        '  align-items: center;',
+        '  font-size: 0.75rem;',
+        '  color: #9ca3af;',
+        '}',
+        '',
+        '.badge {',
+        '  display: inline-flex;',
+        '  align-items: center;',
+        '  padding: 0.25rem 0.5rem;',
+        '  border-radius: 9999px;',
+        '  font-size: 0.625rem;',
+        '  font-weight: 600;',
+        '  text-transform: uppercase;',
+        '  letter-spacing: 0.025em;',
+        '}',
+        '',
+        '.badge-user {',
+        '  background: #dbeafe;',
+        '  color: #1e40af;',
+        '}',
+        '',
+        '.badge-dev {',
+        '  background: #fef3c7;',
+        '  color: #92400e;',
         '}',
         '',
         '.doc-viewer {',
+        '  background: #fff;',
+        '  border-radius: 12px;',
+        '  padding: 2rem;',
+        '  box-shadow: 0 4px 6px rgba(0,0,0,0.05);',
+        '  border: 1px solid #e5e7eb;',
         '  line-height: 1.7;',
         '}',
         '',
-        '.doc-viewer .loading { text-align: center; padding: 3rem; color: var(--text-muted); }',
+        '.doc-viewer .loading {',
+        '  text-align: center;',
+        '  padding: 3rem;',
+        '  color: #6b7280;',
+        '}',
+        '',
+        '.doc-nav {',
+        '  margin-bottom: 1rem;',
+        '  padding-bottom: 1rem;',
+        '  border-bottom: 1px solid #e5e7eb;',
+        '}',
+        '',
+        '.doc-nav-link {',
+        '  color: #667eea;',
+        '  text-decoration: none;',
+        '  font-weight: 500;',
+        '  padding: 0.5rem 1rem;',
+        '  border-radius: 6px;',
+        '  transition: background-color 0.2s ease;',
+        '}',
+        '',
+        '.doc-nav-link:hover {',
+        '  background: #f3f4f6;',
+        '}',
+        '',
         '@media (max-width: 768px) {',
         '  .docs-container {',
+        '    padding: 1rem 0.5rem;',
+        '  }',
+        '  .docs-grid {',
         '    grid-template-columns: 1fr;',
         '  }',
-        '  .docs-sidebar {',
-        '    position: static;',
+        '  .docs-section {',
+        '    padding: 1.5rem;',
+        '  }',
+        '  .doc-viewer {',
+        '    padding: 1.5rem;',
         '  }',
         '}'
-  ].join('\\n');
+      ].join('\\n');
       document.head.appendChild(style);
     }
 
-    // Load documentation
-    this.loadDoc('README');
-
-    // Handle doc navigation
-    document.querySelectorAll('.docs-nav-link').forEach(link => {
-      link.addEventListener('click', (e) => {
-        e.preventDefault();
-        const docName = link.getAttribute('data-doc');
-        
-        // Update active state
-        document.querySelectorAll('.docs-nav-link').forEach(l => l.classList.remove('active'));
-        link.classList.add('active');
-        
-        // Load doc
-        this.loadDoc(docName);
-      });
-    });
+    // Load docs catalog
+    this.loadDocsCatalog();
   }
 
-  async loadDoc(docName) {
-    const viewer = document.getElementById('doc-viewer');
-    viewer.innerHTML = '<div class="loading">Loading documentation...</div>';
+  async loadDocsCatalog() {
+    const content = document.getElementById('docs-content');
+    content.innerHTML = '<div class="loading"><div class="spinner"></div><p>Loading documentation...</p></div>';
 
     try {
-      const response = await fetch(\`/api/docs/\${docName}\`);
-      if (!response.ok) throw new Error('Failed to load documentation');
+      const response = await fetch('/api/docs/');
+      if (!response.ok) throw new Error('Failed to load docs catalog');
       
-      const data = await response.json();
-      if (data.success) {
-        // Convert markdown to HTML
-        const html = this.markdownToHtml(data.data.content);
-        viewer.innerHTML = html;
-      } else {
-        viewer.innerHTML = '<div class="alert alert-error">Failed to load documentation</div>';
-      }
+      const html = await response.text();
+      content.innerHTML = html;
+
+      // Add click handlers for doc cards
+      document.querySelectorAll('.doc-card').forEach(card => {
+        card.addEventListener('click', (e) => {
+          e.preventDefault();
+          const href = card.getAttribute('href');
+          if (href) {
+            const slug = href.replace('/docs/', '');
+            this.showDocViewer(slug);
+          }
+        });
+      });
     } catch (error) {
-      console.error('Error loading doc:', error);
-      viewer.innerHTML = '<div class="alert alert-error">Failed to load documentation. Please try again later.</div>';
+      console.error('Error loading docs catalog:', error);
+      content.innerHTML = '<div class="alert alert-error">Failed to load documentation catalog. Please try again later.</div>';
     }
   }
 
-  // Simple markdown to HTML converter
+  async showDocViewer(slug) {
+    const content = document.getElementById('docs-content');
+    
+    // Show loading state
+    content.innerHTML = [
+      '<div class="doc-viewer">',
+      '  <div class="doc-nav">',
+      '    <a href="#" class="doc-nav-link" onclick="window.app.loadDocsCatalog(); return false;">← Back to Documentation</a>',
+      '  </div>',
+      '  <div class="loading"><div class="spinner"></div><p>Loading document...</p></div>',
+      '</div>'
+    ].join('');
+
+    try {
+      const response = await fetch('/api/docs/' + slug);
+      if (!response.ok) throw new Error('Failed to load document');
+      
+      const data = await response.json();
+      if (data.success) {
+        const html = this.markdownToHtml(data.data.content);
+        const title = data.data.title || slug.replace(/_/g, ' ');
+        
+        content.innerHTML = [
+          '<div class="doc-viewer">',
+          '  <div class="doc-nav">',
+          '    <a href="#" class="doc-nav-link" onclick="window.app.loadDocsCatalog(); return false;">← Back to Documentation</a>',
+          '  </div>',
+          '  <h1 style="font-size: 2rem; font-weight: 700; color: #0f172a; margin-bottom: 0.5rem; border-bottom: 2px solid #e5e7eb; padding-bottom: 0.5rem;">' + title + '</h1>',
+          html,
+          '</div>'
+        ].join('');
+      } else {
+        content.innerHTML = [
+          '<div class="doc-viewer">',
+          '  <div class="doc-nav">',
+          '    <a href="#" class="doc-nav-link" onclick="window.app.loadDocsCatalog(); return false;">← Back to Documentation</a>',
+          '  </div>',
+          '  <div class="alert alert-error">Failed to load document: ' + (data.error || 'Unknown error') + '</div>',
+          '</div>'
+        ].join('');
+      }
+    } catch (error) {
+      console.error('Error loading document:', error);
+      content.innerHTML = [
+        '<div class="doc-viewer">',
+        '  <div class="doc-nav">',
+        '    <a href="#" class="doc-nav-link" onclick="window.app.loadDocsCatalog(); return false;">← Back to Documentation</a>',
+        '  </div>',
+        '  <div class="alert alert-error">Failed to load document. Please try again later.</div>',
+        '</div>'
+      ].join('');
+    }
+  }
+
+  async loadDoc(docName) {
+    // Legacy method - redirect to new slug-based system
+    const slugMap = {
+      'README': 'veritas-documents-chain',
+      'ZERO_KNOWLEDGE_ARCHITECTURE': 'technical-information',
+      'VDC_INTEGRATION_GUIDE': 'technical-information',
+      'DEVELOPMENT_PLAN': 'technical-information',
+      'TECHNICAL_STATUS': 'technical-information',
+      'SECURITY_GUARDRAILS': 'technical-information'
+    };
+    
+    const slug = slugMap[docName] || docName.toLowerCase().replace(/_/g, '-');
+    this.showDocViewer(slug);
+  }
+
+  // Enhanced markdown to HTML converter with mobile-first design
   markdownToHtml(markdown) {
     if (!markdown) return '';
 
     let html = markdown;
     
-    // Code blocks first (to avoid conflicts)
+    // Code blocks first (to avoid conflicts) - enhanced styling
     const codeBlockRegex = /\`\`\`[\\s\\S]*?\`\`\`/g;
     html = html.replace(codeBlockRegex, function(match) {
       const code = match.slice(3, -3).trim();
-      return '<pre style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:6px;padding:1rem;overflow-x:auto;margin:1rem 0;max-width:100%;box-sizing:border-box;"><code style="font-family:monospace;font-size:0.9rem;">' + code + '</code></pre>';
+      return '<div style="margin:1.5rem 0;"><pre style="background:#0f172a;color:#f1f5f9;border:1px solid #334155;border-radius:12px;padding:1.25rem;overflow-x:auto;margin:0;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;font-size:0.875rem;line-height:1.5;max-width:100%;box-sizing:border-box;"><code style="font-family:inherit;font-size:inherit;">' + code + '</code></pre></div>';
     });
     
-    // Inline code
+    // Inline code - enhanced styling
     const inlineCodeRegex = /\`([^\`]+)\`/g;
-    html = html.replace(inlineCodeRegex, '<code style="background:#f1f5f9;padding:0.125rem 0.25rem;border-radius:3px;font-family:monospace;font-size:0.875rem;">$1</code>');
+    html = html.replace(inlineCodeRegex, '<code style="background:#f1f5f9;color:#1e293b;padding:0.25rem 0.5rem;border-radius:6px;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;font-size:0.875rem;border:1px solid #e2e8f0;">$1</code>');
     
-    // Headers
-    html = html.replace(/^### (.*$)/gim, '<h3 style="font-size:1.25rem;font-weight:600;margin:1.5rem 0 0.5rem 0;color:#1f2937;">$1</h3>');
-    html = html.replace(/^## (.*$)/gim, '<h2 style="font-size:1.5rem;font-weight:600;margin:2rem 0 0.75rem 0;color:#1f2937;">$1</h2>');
-    html = html.replace(/^# (.*$)/gim, '<h1 style="font-size:2rem;font-weight:700;margin:2.5rem 0 1rem 0;color:#1f2937;">$1</h1>');
+    // Headers - improved typography and spacing
+    html = html.replace(/^### (.*$)/gim, '<h3 style="font-size:1.5rem;font-weight:600;margin:2rem 0 1rem 0;color:#1e293b;line-height:1.3;letter-spacing:-0.025em;">$1</h3>');
+    html = html.replace(/^## (.*$)/gim, '<h2 style="font-size:1.875rem;font-weight:700;margin:2.5rem 0 1.25rem 0;color:#0f172a;line-height:1.2;letter-spacing:-0.025em;">$1</h2>');
+    html = html.replace(/^# (.*$)/gim, '<h1 style="font-size:2.25rem;font-weight:800;margin:3rem 0 1.5rem 0;color:#0f172a;line-height:1.1;letter-spacing:-0.025em;">$1</h1>');
     
-    // Bold and italic
+    // Bold and italic - improved contrast
     const boldRegex = /\\*\\*(.*?)\\*\\*/g;
     const italicRegex = /\\*(.*?)\\*/g;
-    html = html.replace(boldRegex, '<strong>$1</strong>');
-    html = html.replace(italicRegex, '<em>$1</em>');
+    html = html.replace(boldRegex, '<strong style="font-weight:600;color:#0f172a;">$1</strong>');
+    html = html.replace(italicRegex, '<em style="font-style:italic;color:#475569;">$1</em>');
     
-    // Links - build regex from string to avoid escaping issues
+    // Links - enhanced styling with better accessibility
     const linkRegex = new RegExp('\\\\[([^\\\\]]+)\\\\]\\\\(([^)]+)\\\\)', 'g');
     html = html.replace(linkRegex, function(match, text, url) {
-      return '<a href="' + url + '" target="_blank" rel="noopener" style="color:#2563eb;text-decoration:underline;">' + text + '</a>';
+      return '<a href="' + url + '" target="_blank" rel="noopener noreferrer" style="color:#2563eb;text-decoration:none;border-bottom:1px solid #93c5fd;padding-bottom:2px;transition:color 0.2s ease;">' + text + '</a>';
     });
     
-    // Lists
+    // Lists - improved spacing and mobile-friendly
     const bulletRegex = /^\\* (.*$)/gim;
     const numberRegex = /^\\d+\\. (.*$)/gim;
     const listWrapRegex = /(<li>.*<\\/li>\\n?)+/g;
-    html = html.replace(bulletRegex, '<li style="margin:0.25rem 0;padding-left:0.5rem;">$1</li>');
-    html = html.replace(numberRegex, '<li style="margin:0.25rem 0;padding-left:0.5rem;">$1</li>');
-    html = html.replace(listWrapRegex, '<ul style="margin:1rem 0;padding-left:1.5rem;">$&</ul>');
+    html = html.replace(bulletRegex, '<li style="margin:0.5rem 0;padding-left:0.5rem;position:relative;">$1</li>');
+    html = html.replace(numberRegex, '<li style="margin:0.5rem 0;padding-left:0.5rem;position:relative;">$1</li>');
+    html = html.replace(listWrapRegex, '<ul style="margin:1.5rem 0;padding-left:1.5rem;list-style:none;">$&</ul>');
     
-    // Line breaks
-    html = html.replace(/\\n\\n/g, '</p><p style="margin:1rem 0;line-height:1.7;max-width:100%;word-wrap:break-word;">');
+    // Add bullet points for unordered lists
+    html = html.replace(/<ul([^>]*)>/g, '<ul$1>');
+    html = html.replace(/(<li[^>]*>)/g, '$1<span style="position:absolute;left:0;top:0.5rem;width:6px;height:6px;background:#64748b;border-radius:50%;display:inline-block;margin-right:0.5rem;"></span>');
+    
+    // Line breaks and paragraphs - improved readability
+    html = html.replace(/\\n\\n/g, '</p><p style="margin:1.25rem 0;line-height:1.7;color:#374151;max-width:100%;word-wrap:break-word;hyphens:auto;">');
     html = html.replace(/\\n/g, '<br>');
     
-    // Wrap in responsive paragraph
-    html = '<div style="max-width:100%;overflow-wrap:break-word;word-wrap:break-word;hyphens:auto;"><p style="margin:1rem 0;line-height:1.7;max-width:100%;word-wrap:break-word;">' + html + '</p></div>';
+    // Blockquotes - enhanced styling
+    html = html.replace(/^> (.*$)/gim, '<blockquote style="border-left:4px solid #3b82f6;background:#eff6ff;padding:1rem 1.5rem;margin:1.5rem 0;border-radius:8px;font-style:italic;color:#1e40af;">$1</blockquote>');
+    
+    // Tables - responsive design
+    const tableRegex = /\\|(.+)\\|\\n\\|([\\-:]+)\\|\\n((?:\\|.+\\|\\n)+)/g;
+    html = html.replace(tableRegex, function(match, headers, separators, rows) {
+      const headerCells = headers.split('|').map(h => h.trim()).filter(h => h);
+      const rowLines = rows.trim().split('\\n');
+      let tableHtml = '<div style="overflow-x:auto;margin:1.5rem 0;"><table style="width:100%;border-collapse:collapse;border:1px solid #e2e8f0;border-radius:8px;min-width:600px;"><thead><tr>';
+      
+      headerCells.forEach(header => {
+        tableHtml += '<th style="background:#f8fafc;padding:0.75rem 1rem;text-align:left;font-weight:600;color:#374151;border-bottom:2px solid #e2e8f0;">' + header + '</th>';
+      });
+      
+      tableHtml += '</tr></thead><tbody>';
+      
+      rowLines.forEach(row => {
+        const cells = row.split('|').map(c => c.trim()).filter(c => c);
+        tableHtml += '<tr>';
+        cells.forEach(cell => {
+          tableHtml += '<td style="padding:0.75rem 1rem;border-bottom:1px solid #f1f5f9;color:#475569;">' + cell + '</td>';
+        });
+        tableHtml += '</tr>';
+      });
+      
+      tableHtml += '</tbody></table></div>';
+      return tableHtml;
+    });
+    
+    // Wrap in responsive container with improved typography
+    html = '<div style="max-width:100%;overflow-wrap:break-word;word-wrap:break-word;hyphens:auto;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Oxygen,Ubuntu,Cantarell,sans-serif;"><div style="max-width:65ch;margin:0 auto;padding:0 1rem;"><p style="margin:1.25rem 0;line-height:1.7;color:#374151;max-width:100%;word-wrap:break-word;hyphens:auto;">' + html + '</p></div></div>';
     
     // Clean up
     html = html.replace(/<p><\\/p>/g, '');
@@ -1720,11 +1929,14 @@ class VeritasApp {
     html = html.replace(/(<\\/h[1-6]>)<\\/p>/g, '$1');
     html = html.replace(/<p>(<pre>)/g, '$1');
     html = html.replace(/(<\\/pre>)<\\/p>/g, '$1');
+    html = html.replace(/<p>(<div>)/g, '$1');
+    html = html.replace(/(<\\/div>)<\\/p>/g, '$1');
     html = html.replace(/<p>(<ul>)/g, '$1');
     html = html.replace(/(<\\/ul>)<\\/p>/g, '$1');
-    
-    // Wrap everything in a responsive container
-    html = '<div style="max-width:100%;padding:0 1rem;margin:0 auto;word-wrap:break-word;overflow-wrap:break-word;">' + html + '</div>';
+    html = html.replace(/<p>(<table>)/g, '$1');
+    html = html.replace(/(<\\/table>)<\\/p>/g, '$1');
+    html = html.replace(/<p>(<blockquote>)/g, '$1');
+    html = html.replace(/(<\\/blockquote>)<\\/p>/g, '$1');
     
     return html;
   }

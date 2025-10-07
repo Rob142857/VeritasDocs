@@ -57,82 +57,99 @@ Dilithium-2: "Hash-based signatures"
 
 ---
 
-## ⚡ Unique Core Functions
+## ⚡ Core Framework Components
 
-### 1. **Kyber-768 Encryption** - Unbreakable Encryption
+Ma'atara Core provides the complete toolkit that powers Veritas Documents:
 
-**What it does:**
-- Encrypts data so securely that even quantum computers can't break it
-- Uses advanced mathematics (lattices) that quantum computers can't solve
-- Provides **Level 3 security** (highest NIST standard)
+### 1. **Kyber-768 Encryption** - The Encryption Engine
 
-**Real-world impact:**
+**What Ma'atara provides:**
+- NIST-standardized post-quantum encryption algorithm
+- WebAssembly-optimized implementation for browsers
+- Complete key generation and management framework
+- Developer-friendly APIs for encryption operations
+
+**How Veritas uses it:**
 ```
-Your bank transfers → Quantum computer tries to intercept → "Access Denied"
-Your medical records → Quantum hacker attempts breach → "Encryption Holds"
-Your legal documents → Future quantum attacks → "Still Secure"
-```
-
-**Why it's revolutionary:**
-- ✅ **Future-proof**: Works against all known quantum attacks
-- ✅ **Fast**: Quick enough for real-time encryption
-- ✅ **Standardized**: Approved by NIST for government use
-- ✅ **Open-source**: Anyone can verify the security
-
-### 2. **Dilithium-2 Signatures** - Unforgeable Proof
-
-**What it does:**
-- Creates digital signatures that prove who signed something
-- Impossible to forge or deny (non-repudiation)
-- Remains secure against quantum forgery attacks
-
-**Real-world applications:**
-```
-Legal contracts: "I, John Doe, signed this on October 3, 2025"
-Court evidence: "Cryptographically proven - cannot be disputed"
-Digital wills: "Signature valid forever, even against quantum attacks"
+Ma'atara Framework → Kyber-768 encryption tools
+Veritas Application → Encrypts your legal documents client-side
+Result → Quantum-resistant document protection
 ```
 
-**Unique features:**
-- ✅ **Non-repudiation**: You can't deny your signature
-- ✅ **Quantum-resistant**: Future computers can't forge signatures
-- ✅ **Compact**: Small signature size for efficiency
-- ✅ **Fast verification**: Quick to check authenticity
+**Developer-friendly features:**
+- ✅ **Simple APIs**: Easy integration for applications
+- ✅ **Browser-native**: Runs directly in web browsers via WASM
+- ✅ **Standardized**: NIST FIPS 203 compliant
+- ✅ **Future-proof**: Quantum-resistant by design
 
-### 3. **WebAssembly (WASM) Integration** - Browser Security
+### 2. **Dilithium-2 Signatures** - The Signature Framework
 
-**What it does:**
-- Runs advanced cryptography directly in your web browser
-- No server needed for encryption/decryption
-- Your private keys never leave your device
+**What Ma'atara provides:**
+- Post-quantum digital signature scheme
+- Complete signing and verification toolkit
+- Non-repudiation and authenticity frameworks
+- Optimized for blockchain and legal applications
 
-**Why this changes everything:**
+**How Veritas uses it:**
 ```
-Traditional: Send data to server → Server encrypts → Send back
-Ma'atara: Browser encrypts locally → Send encrypted data → Server stores safely
-
-Result: Server never sees your secrets!
+Ma'atara Framework → Dilithium-2 signature tools
+Veritas Application → Signs all VDC blockchain transactions
+Result → Legally-binding, quantum-resistant signatures
 ```
 
-### 4. **Zero-Knowledge Architecture** - Privacy by Design
+**Framework features:**
+- ✅ **Non-repudiation**: Cannot deny authentic signatures
+- ✅ **Fast verification**: Quick signature checking
+- ✅ **Compact size**: Efficient for blockchain storage
+- ✅ **NIST approved**: FIPS 204 standardized
 
-**What it does:**
-- Proves you have the right to access data without revealing secrets
-- Server validates your identity through cryptography, not passwords
+### 3. **WebAssembly (WASM) Runtime** - The Execution Engine
 
-**How it works:**
+**What Ma'atara provides:**
+- High-performance cryptographic operations in browsers
+- Zero-server dependency architecture
+- Cross-platform compatibility framework
+- Optimized binary modules for speed
+
+**How Veritas uses it:**
 ```
-Login Process:
-1. You prove: "I can decrypt my own data" (without showing the key)
-2. Server confirms: "Yes, that's your data" (without seeing it)
-3. Result: Secure login without exposing secrets
+Ma'atara Framework → WASM cryptographic runtime
+Veritas Application → Runs all crypto client-side
+Result → Zero-knowledge architecture (server never sees keys)
 ```
+
+**Runtime advantages:**
+- ✅ **Client-side execution**: No server trust required
+- ✅ **High performance**: Near-native speed
+- ✅ **Cross-browser**: Works everywhere
+- ✅ **Secure sandbox**: Isolated execution environment
+
+### 4. **Data Structures & Principles** - The Architecture Foundation
+
+**What Ma'atara provides:**
+- Merkle tree implementations for integrity
+- Hash-based data structures
+- Zero-knowledge proof patterns
+- Cryptographic protocol designs
+
+**How Veritas uses it:**
+```
+Ma'atara Framework → Merkle tree data structures
+Veritas Application → Builds VDC blockchain & Ethereum anchoring
+Result → Efficient multi-layer verification system
+```
+
+**Architectural components:**
+- ✅ **Merkle trees**: Efficient integrity verification
+- ✅ **Hash chains**: Immutable record structures
+- ✅ **ZK patterns**: Privacy-preserving designs
+- ✅ **Protocol templates**: Battle-tested security patterns
 
 ---
 
-## 🚀 How It Changes Online Security
+## 🚀 How Ma'atara Framework Changes Online Security
 
-### The Current Internet Security Crisis
+### The Framework Foundation for Secure Applications
 
 **Today's problems:**
 - ❌ Passwords get stolen in massive breaches
@@ -140,89 +157,119 @@ Login Process:
 - ❌ Servers store sensitive data (big targets)
 - ❌ Users trust companies with their secrets
 
-**Ma'atara's solutions:**
-- ✅ **No passwords to steal** (cryptographic proof instead)
-- ✅ **Quantum-resistant encryption** (future-proof)
-- ✅ **Client-side encryption** (servers don't see secrets)
-- ✅ **Mathematical trust** (no need to trust companies)
+**Ma'atara framework provides the foundation:**
+- ✅ **Cryptographic proof primitives** (replace passwords)
+- ✅ **Quantum-resistant algorithms** (future-proof cryptography)
+- ✅ **Client-side encryption tools** (servers don't see secrets)
+- ✅ **Mathematical verification** (no need to trust companies)
 
-### Real-World Transformations
+### Applications Built on Ma'atara Framework
 
-#### Banking & Finance
+#### Veritas Documents (Legal Industry)
 ```
-Current: "Trust bank with your money and transaction data"
-Ma'atara: "Bank proves transactions are valid without seeing amounts"
-Result: Private banking with public verification
-```
+Framework Layer (Ma'atara):
+- Kyber-768 encryption engine
+- Dilithium-2 signature system
+- Zero-knowledge protocols
 
-#### Healthcare
-```
-Current: "Medical records stored on hospital servers"
-Ma'atara: "Records encrypted on your device, shared with mathematical proof"
-Result: You control your medical data forever
-```
+Application Layer (Veritas):
+- VDC blockchain for legal documents
+- IPFS integration for storage
+- Ethereum anchoring for verification
 
-#### Legal Documents
-```
-Current: "Notary stamps and paper trails"
-Ma'atara: "Cryptographic proof of authenticity and timing"
-Result: Court-admissible digital documents
+Result: Court-admissible digital documents with ultimate proof
 ```
 
-#### Voting Systems
+**Learn more about Veritas:** This application demonstrates Ma'atara's power for legal professionals
+
+#### Other Potential Applications
+
+**Banking & Finance:**
 ```
-Current: "Trust voting machines and counters"
-Ma'atara: "Verify your vote was counted without revealing how you voted"
+Ma'atara provides: Encryption, signatures, zero-knowledge primitives
+Application builds: Private transactions with public verification
+Result: Private banking with cryptographic proof
+```
+
+**Healthcare:**
+```
+Ma'atara provides: Client-side encryption, access control protocols
+Application builds: Medical record management system
+Result: Patient-controlled medical data
+```
+
+**Voting Systems:**
+```
+Ma'atara provides: Anonymous credentials, verifiable computation
+Application builds: Electronic voting platform
 Result: Transparent elections with voter privacy
 ```
 
 ---
 
-## 🔮 Future Impact on Data Operations
+## 🔮 Future Impact: The Post-Quantum Framework
 
-### The Post-Quantum Internet
+### Ma'atara Enables a New Internet Architecture
 
-**Ma'atara enables a new internet architecture:**
+**The framework provides the building blocks:**
 
-#### 1. **Self-Sovereign Data**
-- **You own your data**: Encrypted on your device, shared on your terms
-- **No more data breaches**: Servers only store encrypted data
-- **Portable identity**: Your cryptographic keys work everywhere
+#### 1. **Self-Sovereign Data Applications**
+Ma'atara framework provides:
+- **Client-side encryption primitives**: Data encrypted on user's device
+- **Key management protocols**: Cryptographic identity without central authority
+- **Access control mechanisms**: Share data on user's terms
 
-#### 2. **Zero-Trust Networks**
-- **Verify, don't trust**: Mathematical proof instead of passwords
-- **Client-side security**: Your device does the heavy lifting
-- **Quantum-resistant**: Works against all future threats
+Applications can build:
+- Personal data vaults
+- Portable identity systems
+- User-controlled data sharing
 
-#### 3. **Decentralized Applications**
-- **No central servers**: Data lives on decentralized networks
-- **Cryptographic consensus**: Agreements proven mathematically
-- **Global accessibility**: Work from anywhere, securely
+#### 2. **Zero-Trust Network Applications**
+Ma'atara framework provides:
+- **Cryptographic verification**: Mathematical proof instead of passwords
+- **Signature schemes**: Dilithium-2 for authentication
+- **Quantum-resistant protocols**: Works against all future threats
 
-### Industry Transformations
+Applications can build:
+- Passwordless authentication systems
+- Secure communication platforms
+- Trustless verification networks
 
-#### Cloud Computing
+#### 3. **Decentralized Application Foundation**
+Ma'atara framework provides:
+- **Hash chain structures**: For blockchain implementations
+- **Merkle tree utilities**: For efficient verification
+- **Consensus primitives**: For cryptographic agreements
+
+Applications can build:
+- Custom blockchains (like Veritas' VDC)
+- Decentralized storage systems
+- Distributed consensus networks
+
+### Framework Advantages for Developers
+
+#### Reusable Security Components
 ```
-Current: "Store data in the cloud (trust provider)"
-Future: "Store encrypted data anywhere (trust mathematics)"
+Instead of implementing from scratch:
+❌ Research post-quantum algorithms
+❌ Implement cryptographic primitives
+❌ Optimize for WebAssembly
+❌ Handle edge cases and security
+
+Use Ma'atara framework:
+✅ Pre-built, audited implementations
+✅ High-performance WASM modules
+✅ Developer-friendly APIs
+✅ Battle-tested in production (Veritas)
 ```
 
-#### Social Media
+#### Build Secure Applications Faster
 ```
-Current: "Platform owns your posts and data"
-Future: "You own your content, platforms just display it"
-```
+Traditional approach: 6-12 months of crypto development
+Ma'atara framework: Focus on your application logic
 
-#### E-commerce
-```
-Current: "Trust payment processors with your card details"
-Future: "Cryptographic proof of payment without sharing details"
-```
-
-#### Government Services
-```
-Current: "Central databases with citizen data"
-Future: "Citizens control their own data, government proves legitimacy"
+Time saved: Focus on user experience, not cryptography
+Security gained: Proven framework used in production
 ```
 
 ---
@@ -350,58 +397,110 @@ Ma'atara uses **NIST-approved algorithms**:
 
 ---
 
-## 📊 Performance & Efficiency
+## 📊 Framework Performance & Efficiency
 
-### Speed Benchmarks
+### Ma'atara Framework Benchmarks
 
-**Encryption Performance:**
-- **Kyber-768**: ~1-2 seconds for document encryption (browser)
-- **Throughput**: Thousands of documents per minute
-- **Scalability**: Handles enterprise-scale document volumes
+**Encryption Engine Performance:**
+- **Kyber-768**: ~1-2 seconds for document encryption (browser WASM)
+- **Throughput**: Thousands of operations per minute
+- **Scalability**: Enterprise-grade performance
 
-**Signature Performance:**
-- **Dilithium-2**: ~100-200ms per signature
+**Signature Framework Performance:**
+- **Dilithium-2**: ~100-200ms per signature generation
 - **Batch processing**: Efficient for bulk operations
-- **Verification**: Instant signature checking
+- **Verification**: Instant signature validation
 
-### Resource Efficiency
+### Framework Efficiency
 
-**Browser Compatibility:**
-- ✅ **Modern browsers**: Full WebAssembly support
-- ✅ **Mobile devices**: Optimized for mobile performance
-- ✅ **Low-power devices**: Efficient cryptographic operations
+**Runtime Compatibility:**
+- ✅ **WebAssembly**: High-performance browser execution
+- ✅ **Cross-platform**: Works in all modern environments
+- ✅ **Optimized**: Low overhead, minimal resource usage
 
 **Storage Efficiency:**
-- ✅ **Compact signatures**: Small blockchain footprint
-- ✅ **Content addressing**: Efficient IPFS storage
-- ✅ **Merkle trees**: Fast integrity verification
+- ✅ **Compact data structures**: Small memory footprint
+- ✅ **Efficient serialization**: Minimal bandwidth usage
+- ✅ **Fast verification**: Optimized Merkle tree implementations
+
+**Why this matters for developers:**
+- Build responsive applications without crypto bottlenecks
+- Scale to enterprise workloads with proven performance
+- Deploy on any platform (web, mobile, server)
+
+### Veritas Documents Performance (Built on Ma'atara)
+- Processes thousands of legal documents daily
+- Sub-second encryption and signature operations
+- Scales from individual users to law firms
+- Proven in production environment
 
 ---
 
-## 🔗 Connection to Veritas Documents
+## 🔗 How Ma'atara Powers Veritas Documents
 
-### How Ma'atara Powers Veritas
+### The Framework-Application Relationship
 
-**In Veritas Documents:**
-- ✅ **Kyber-768** encrypts your legal documents
-- ✅ **Dilithium-2** signs all blockchain transactions
-- ✅ **Zero-knowledge** keeps your data private
-- ✅ **Post-quantum** protects against future threats
+**Ma'atara Core provides the foundation:**
+- **Cryptographic algorithms**: Kyber-768, Dilithium-2
+- **Data structures**: Merkle trees, hash chains
+- **Security principles**: Zero-knowledge, client-side encryption
+- **Developer tools**: APIs, WASM modules, protocol templates
+- **Performance**: Optimized implementations
 
-**Why this combination matters:**
-- **Legal admissibility**: Court-accepted cryptographic proof
-- **Future security**: Protected against quantum computing
-- **Privacy protection**: Your documents stay private forever
-- **Global accessibility**: Works from any device, anywhere
+**Veritas Documents builds the application:**
+- **User interface**: Document upload, management, search
+- **VDC blockchain**: Custom blockchain for legal documents
+- **IPFS integration**: Decentralized document storage
+- **Ethereum anchoring**: Global verification layer
+- **Legal workflows**: Designed for legal professionals
+
+### The Power of Combination
+
+```
+Ma'atara Core (Framework Layer)
+├── Post-quantum cryptography
+├── WebAssembly runtime
+├── Data structure templates
+└── Security protocols
+
+      ↓ Powers ↓
+
+Veritas Documents (Application Layer)
+├── VDC blockchain
+├── Document encryption
+├── Legal signatures
+└── Multi-layer verification
+```
+
+**For users:**
+- You interact with **Veritas Documents** (the application)
+- Behind the scenes, **Ma'atara Core** handles all cryptography
+- Result: Easy-to-use platform with enterprise-grade security
+
+**For developers:**
+- Ma'atara Core provides **reusable components**
+- Build your own applications using the same framework
+- Leverage battle-tested cryptographic implementations
 
 ---
 
 ## 📚 Learn More
 
-### Technical Resources
-- [**Ma'atara Protocol Documentation**](https://docs.maatara.com) - Official technical docs
-- [**NIST Post-Quantum Standards**](https://csrc.nist.gov/projects/post-quantum-cryptography) - Government standards
-- [**Technical Information**](./TECHNICAL_INFORMATION.md) - Veritas technical details
+### Official Ma'atara Resources
+- 🌐 [**Ma'atara Core Documentation**](https://maatara-core-worker.rme-6e5.workers.dev/site) - Complete framework documentation, API references, developer guides
+- 📖 **Developer Portal**: Integration guides, code examples, best practices
+- 🔧 **API Reference**: Detailed documentation for all framework components
+- 🛠️ **GitHub**: Open-source framework code and community contributions
+
+### Post-Quantum Cryptography Standards
+- [**NIST Post-Quantum Standards**](https://csrc.nist.gov/projects/post-quantum-cryptography) - Official government standards
+- **Kyber-768**: NIST-standardized encryption algorithm
+- **Dilithium-2**: NIST-standardized signature scheme
+
+### Veritas Documents (Built on Ma'atara)
+- [**Veritas Technical Information**](./TECHNICAL_INFORMATION.md) - Implementation details
+- [**VDC Blockchain Architecture**](./VERITAS_DOCUMENTS_CHAIN.md) - How VDC uses Ma'atara
+- [**Security Architecture**](./SECURITY_ARCHITECTURE.md) - Zero-knowledge design
 
 ### Community & Support
 - **Developer Forums**: Join cryptography discussions

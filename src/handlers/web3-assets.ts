@@ -193,7 +193,11 @@ enhancedAssetHandler.post('/create-web3', async (c) => {
     }
 
     // 3. Create asset metadata for blockchain anchoring (store to IPFS if available)
-    const assetMetadata = {
+    // PRIVACY PROTECTION: Only include identifying info if document is public
+    const isPublic = isPubliclySearchable === true;
+    
+    const assetMetadata = isPublic ? {
+      // PUBLIC metadata - searchable and viewable by anyone
       id: assetId,
       title,
       description,
@@ -202,12 +206,21 @@ enhancedAssetHandler.post('/create-web3', async (c) => {
       creatorId: userId,
       ...(ipfsRecord?.hash ? { ipfsHash: ipfsRecord.hash } : {}),
       createdAt: Date.now(),
-      isPubliclySearchable: isPubliclySearchable || false,
+      isPubliclySearchable: true,
       publicMetadata: {
         ...(publicMetadata || {}),
         originalContentType: contentType || undefined,
         originalFilename: filename || undefined
       }
+    } : {
+      // PRIVATE metadata - minimal info for ownership verification only
+      id: assetId,
+      ...(ipfsRecord?.hash ? { ipfsHash: ipfsRecord.hash } : {}),
+      createdAt: Date.now(),
+      isPubliclySearchable: false,
+      // Include public keys for ownership verification when user logs in
+      ownerPublicKey: userKyberPublicKey,
+      creatorPublicKey: userKyberPublicKey
     };
 
     // 4. Upload metadata to IPFS if available; otherwise continue without
@@ -312,7 +325,7 @@ enhancedAssetHandler.post('/create-web3', async (c) => {
       createdAt: Date.now(),
       updatedAt: Date.now(),
       isPubliclySearchable: isPubliclySearchable || false,
-      publicMetadata: assetMetadata.publicMetadata || {},
+      publicMetadata: isPublic ? (assetMetadata as any).publicMetadata || {} : {},
       // Web3 integration fields
       merkleRoot: ethereumAnchor.anchorHash,
       ethereumTxHash: ethereumAnchor.ethereumTxHash,

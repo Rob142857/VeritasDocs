@@ -6,8 +6,17 @@
 **Audience**: Legal, Users, Developers  
 **Category**: Overview  
 **Priority**: 1  
-**Summary**: High-level overview of the Veritas Documents platform, covering zero-knowledge security, blockchain architecture, and operational pillars for legal and technical stakeholders.  
-**Keywords**: overview, legal, platform, security, blockchain
+**Summary**: High-level overview of the Veritas Documents platform, covering zero-knowledge security, blockchain architecture, and operational pillars for legal and technical stakeholders## 📚 Documentation
+
+- **[🔐 Zero-Knowledge Architecture](./ZERO_KNOWLEDGE_ARCHITECTURE.md)** - Security model and cryptographic flows
+- **[⛓️ Blockchain Architecture](./BLOCKCHAIN_ARCHITECTURE.md)** - VDC blockchain design
+- **[🗄️ Storage Architecture](./STORAGE_ARCHITECTURE.md)** - Multi-tier storage with Cloudflare PQC and IPFS privacy
+- **[🔑 Activation Token Flow](./ACTIVATION_TOKEN_FLOW.md)** - User onboarding process
+- **[🔧 Technical Status](./TECHNICAL_STATUS.md)** - Implementation details and deployment
+- **[📖 VDC Integration Guide](./VDC_INTEGRATION_GUIDE.md)** - Working with VDC blockchain
+- **[🛡️ Security Guardrails](./SECURITY_GUARDRAILS.md)** - User warnings and key management
+- **[📋 IPFS Privacy Reference](./IPFS_PRIVACY_REFERENCE.md)** - Quick reference for metadata privacy
+- **[⚡ Quick Reference](./QUICK_REFERENCE.md)** - Developer guide and commandswords**: overview, legal, platform, security, blockchain
 
 ---
 
@@ -391,6 +400,7 @@ curl "https://veritas-docs-production.rme-6e5.workers.dev/api/auth/token-info?to
 - **[🔧 Technical Status](./TECHNICAL_STATUS.md)** - Implementation details and deployment
 - **[📖 VDC Integration Guide](./VDC_INTEGRATION_GUIDE.md)** - Working with VDC blockchain
 - **[🛡️ Security Guardrails](./SECURITY_GUARDRAILS.md)** - User warnings and key management
+- **[�️ IPFS Storage Architecture](./IPFS_STORAGE_ARCHITECTURE.md)** - Privacy-aware metadata and storage layers
 - **[⚡ Quick Reference](./QUICK_REFERENCE.md)** - Developer guide and commands
 
 ---

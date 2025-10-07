@@ -82,6 +82,23 @@ Your documents aren't stored in just one place - they're stored across multiple 
 - **Purpose**: Additional backup and redundancy
 - **Benefits**: Low-cost, high-durability storage
 
+#### 4. **VDC Blockchain (Public Cryptographic Record)**
+- **What**: Veritas Documents Chain - your complete transaction history
+- **Purpose**: Immutable proof of all document operations and ownership
+- **Accessibility**: **Completely public in encrypted block form**
+- **Your Control**: 
+  - ✅ **Download anytime**: Export your entire blockchain history
+  - ✅ **Personal backup**: Create your own offline copies
+  - ✅ **Portable access**: Future development will enable portable viewing
+  - ✅ **No vendor lock-in**: Your cryptographic proof exists independently
+  - ✅ **Paper reconstitution**: Print cryptographic records for ultimate disaster recovery
+
+**Why VDC is public:**
+- **Transparency**: Anyone can verify the blockchain's integrity
+- **Independence**: Your proof doesn't depend on Veritas platform staying online
+- **Legal admissibility**: Independent third parties can validate your documents
+- **True ownership**: You control your cryptographic records completely
+
 ### Why Multiple Storage Layers?
 
 ```
@@ -90,14 +107,19 @@ Your Document's Journey:
 2. Stored in IPFS → Gets permanent content address
 3. Metadata indexed in KV → Fast searching
 4. Backed up in R2 → Additional safety
-5. All locations verified → Complete redundancy
+5. Transaction recorded on VDC → Public cryptographic proof
+6. VDC blocks downloadable → Your personal backup
+7. All locations verified → Complete redundancy
 ```
 
 **Benefits:**
 - ✅ **No Single Point of Failure**: If one system fails, others still work
 - ✅ **Global Accessibility**: Access from anywhere in the world
+- ✅ **Complete Ownership**: Download and backup your VDC blockchain anytime
+- ✅ **Public Verification**: Anyone can validate your cryptographic proofs
 - ✅ **Cost Effective**: Uses the best storage for each purpose
 - ✅ **Future-Proof**: Technology can evolve without losing documents
+- ✅ **True Portability**: Your blockchain records are yours forever (portable viewing coming soon)
 
 ---
 

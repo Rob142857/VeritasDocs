@@ -3,6 +3,8 @@ import { Environment, APIResponse, User } from '../types';
 import { initializeVDC } from '../utils/blockchain';
 import { IPFSClient } from '../utils/ipfs';
 import { storeChainBlock } from '../utils/store';
+import { submitAdminCommit } from '../utils/ethereum';
+import { MaataraClient } from '../utils/crypto';
 
 const vdcHandler = new Hono<{ Bindings: Environment }>();
 
@@ -163,6 +165,220 @@ vdcHandler.post('/ipfs/warm', async (c) => {
       return c.json({ success: false, error: e?.message || 'Failed to warm IPFS gateway' }, 500);
     }
   });
+
+// Admin: submit an Ethereum commit (super-root) via Cloudflare Web3 gateway
+vdcHandler.post('/ethereum/commit', async (c) => {
+  try {
+    let body: any = {};
+    try {
+      if (c.req.header('content-type')?.includes('application/json')) {
+        body = await c.req.json();
+      }
+    } catch {}
+
+    const adminSecret = extractAdminSecret(c.req.header('x-admin-secret'), body);
+    const authError = ensureAdminAccess(c, adminSecret);
+    if (authError) return authError;
+
+    const { superRoot, latestBlock, note } = body || {};
+    if (!superRoot || typeof superRoot !== 'string') {
+      return c.json<APIResponse>({ success: false, error: 'superRoot is required' }, 400);
+    }
+
+    const res = await submitAdminCommit(c.env as Environment, {
+      superRoot,
+      latestBlock: typeof latestBlock === 'number' ? latestBlock : undefined,
+      note: typeof note === 'string' ? note : undefined
+    });
+
+    return c.json<APIResponse>({ success: true, data: { txHash: res.txHash, submittedAt: res.submittedAt } });
+  } catch (error: any) {
+    console.error('Ethereum commit error:', error);
+    return c.json<APIResponse>({ success: false, error: error?.message || 'Failed to submit Ethereum commit' }, 500);
+  }
+});
+
+// Admin: ping Ethereum RPC (eth_chainId) to test connectivity/latency
+vdcHandler.get('/ethereum/ping', async (c) => {
+  try {
+    // Accept either session-based admin auth or admin secret header
+    let isAdmin = false;
+    const user = await authenticateUser(c);
+    if (user && user.accountType === 'admin') {
+      isAdmin = true;
+    } else {
+      const adminSecret = extractAdminSecret(c.req.header('x-admin-secret'), null);
+      const authError = ensureAdminAccess(c, adminSecret);
+      if (!authError) {
+        isAdmin = true;
+      }
+    }
+
+    if (!isAdmin) {
+      return c.json({ success: false, error: 'Admin access required' }, 403);
+    }
+
+    const env = c.env as Environment;
+    const rpcUrl = env.ETHEREUM_RPC_URL;
+    const started = Date.now();
+    const resp = await fetch(rpcUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_chainId', params: [] })
+    });
+    const elapsed = Date.now() - started;
+    const contentType = resp.headers.get('content-type') || '';
+    let json: any | null = null;
+    let text: string | null = null;
+    try {
+      if (contentType.includes('application/json')) {
+        json = await resp.json();
+      } else {
+        text = await resp.text();
+      }
+    } catch (e) {
+      // If parsing fails, try text as a last resort
+      try { text = await resp.text(); } catch {}
+    }
+
+    const ok = resp.ok && json && (json.result || json.error == null);
+    if (ok) {
+      return c.json<APIResponse>({ success: true, data: { chainId: json.result, elapsedMs: elapsed, status: resp.status, url: rpcUrl } });
+    }
+
+    // Not OK or not JSON -> return a helpful error including a small snippet
+    const snippet = (text || JSON.stringify(json) || '').slice(0, 200);
+    const errMsg = (json && json.error && (json.error.message || json.error)) || snippet || 'RPC failed';
+    return c.json<APIResponse>({ success: false, error: errMsg, data: { elapsedMs: elapsed, status: resp.status, url: rpcUrl } }, 502);
+  } catch (error: any) {
+    return c.json<APIResponse>({ success: false, error: error?.message || 'RPC ping failed' }, 500);
+  }
+});
+
+// Admin: get system Ethereum wallet info (address only, no secrets)
+vdcHandler.get('/ethereum/wallet', async (c) => {
+  try {
+    // Accept either session-based admin auth or admin secret header
+    let isAdmin = false;
+    const user = await authenticateUser(c);
+    if (user && user.accountType === 'admin') {
+      isAdmin = true;
+    } else {
+      const adminSecret = extractAdminSecret(c.req.header('x-admin-secret'), null);
+      const authError = ensureAdminAccess(c, adminSecret);
+      if (!authError) {
+        isAdmin = true;
+      }
+    }
+
+    if (!isAdmin) {
+      return c.json({ success: false, error: 'Admin access required' }, 403);
+    }
+
+    const env = c.env as Environment;
+    const address = (env as any).SYSTEM_ETH_FROM_ADDRESS as string | undefined;
+    const configured = !!((env as any).SYSTEM_ETH_PRIVATE_KEY || (env as any).SYSTEM_ETH_PRIVATE_KEY_PART1 || (env as any).SYSTEM_ETH_PRIVATE_KEY_PART2);
+
+    return c.json<APIResponse>({ success: true, data: { address: address || null, configured } });
+  } catch (error: any) {
+    return c.json<APIResponse>({ success: false, error: error?.message || 'Failed to retrieve wallet info' }, 500);
+  }
+});
+
+// Admin: compute super-root over all existing blocks using Maatara Core (fallback to local SHA-256)
+vdcHandler.get('/ethereum/super-root', async (c) => {
+  try {
+    // Accept either session-based admin auth or admin secret header
+    let isAdmin = false;
+    const user = await authenticateUser(c);
+    if (user && user.accountType === 'admin') {
+      isAdmin = true;
+    } else {
+      const adminSecret = extractAdminSecret(c.req.header('x-admin-secret'), null);
+      const authError = ensureAdminAccess(c, adminSecret);
+      if (!authError) {
+        isAdmin = true;
+      }
+    }
+
+    if (!isAdmin) {
+      return c.json({ success: false, error: 'Admin access required' }, 403);
+    }
+
+    const env = c.env as Environment;
+    const latestData = await env.VERITAS_KV.get('vdc:latest');
+    if (!latestData) return c.json<APIResponse>({ success: false, error: 'Chain not initialized' }, 400);
+    const latest = JSON.parse(latestData) as { blockNumber: number };
+    const latestBlockNumber = latest.blockNumber;
+
+    // Walk blocks and gather their canonical hashes
+    const hashes: string[] = [];
+    for (let i = 0; i <= latestBlockNumber; i++) {
+      const blockStr = await env.VERITAS_KV.get(`vdc:block:${i}`);
+      if (!blockStr) {
+        return c.json<APIResponse>({ success: false, error: `Block ${i} not found in KV (try maintenance rebuild)` }, 500);
+      }
+      const block = JSON.parse(blockStr);
+      if (!block || !block.hash) {
+        return c.json<APIResponse>({ success: false, error: `Block ${i} missing hash` }, 500);
+      }
+      hashes.push(String(block.hash));
+    }
+
+    // Compute super-root via Maatara Core (with local fallback baked in)
+    const maatara = new MaataraClient(env);
+    const superRoot = await maatara.computeSuperRoot(hashes);
+    return c.json<APIResponse>({ success: true, data: { superRoot, latestBlockNumber, count: hashes.length } });
+  } catch (error: any) {
+    return c.json<APIResponse>({ success: false, error: error?.message || 'Failed to compute super-root' }, 500);
+  }
+});
+
+// Admin: test fetching first byte via storage gateway for a given CID
+vdcHandler.get('/ipfs/test/:cid', async (c) => {
+  try {
+    // Accept either session-based admin auth or admin secret header
+    let isAdmin = false;
+    const user = await authenticateUser(c);
+    if (user && user.accountType === 'admin') {
+      isAdmin = true;
+    } else {
+      const adminSecret = extractAdminSecret(c.req.header('x-admin-secret'), null);
+      const authError = ensureAdminAccess(c, adminSecret);
+      if (!authError) {
+        isAdmin = true;
+      }
+    }
+
+    if (!isAdmin) {
+      return c.json({ success: false, error: 'Admin access required' }, 403);
+    }
+
+    const { cid } = c.req.param();
+    if (!cid) return c.json<APIResponse>({ success: false, error: 'cid required' }, 400);
+
+    const env = c.env as Environment;
+    const base = env.IPFS_GATEWAY_URL || 'https://storage.ma-atara.io';
+    const url = `${base}/ipfs/${cid}`;
+    const controller = new AbortController();
+    const started = Date.now();
+    let headOk = false; let headStatus: number | undefined;
+    try {
+      const h = await fetch(url, { method: 'HEAD', signal: controller.signal });
+      headOk = h.ok; headStatus = h.status;
+      if (headOk) {
+        return c.json<APIResponse>({ success: true, data: { url, method: 'HEAD', status: headStatus, elapsedMs: Date.now() - started } });
+      }
+    } catch {}
+    // Fallback to GET with a range to minimize bytes
+    const g = await fetch(url, { method: 'GET', headers: { 'Range': 'bytes=0-0', 'Accept': '*/*' }, signal: controller.signal });
+    const elapsed = Date.now() - started;
+    const ok = g.ok;
+    return c.json<APIResponse>({ success: ok, data: { url, method: 'GET', status: g.status, elapsedMs: elapsed } }, ok ? 200 : 502);
+  } catch (error: any) {
+    return c.json<APIResponse>({ success: false, error: error?.message || 'CID test failed' }, 500);
+  }
+});
 // Admin endpoint: migrate all blocks missing storage/ipfs metadata
 vdcHandler.post('/migrate-missing-storage', async (c) => {
   let body: any = {};

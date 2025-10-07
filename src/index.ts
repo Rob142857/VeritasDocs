@@ -1675,17 +1675,17 @@ class VeritasApp {
     const codeBlockRegex = /\`\`\`[\\s\\S]*?\`\`\`/g;
     html = html.replace(codeBlockRegex, function(match) {
       const code = match.slice(3, -3).trim();
-      return '<pre><code>' + code + '</code></pre>';
+      return '<pre style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:6px;padding:1rem;overflow-x:auto;margin:1rem 0;max-width:100%;box-sizing:border-box;"><code style="font-family:monospace;font-size:0.9rem;">' + code + '</code></pre>';
     });
     
     // Inline code
     const inlineCodeRegex = /\`([^\`]+)\`/g;
-    html = html.replace(inlineCodeRegex, '<code>$1</code>');
+    html = html.replace(inlineCodeRegex, '<code style="background:#f1f5f9;padding:0.125rem 0.25rem;border-radius:3px;font-family:monospace;font-size:0.875rem;">$1</code>');
     
     // Headers
-    html = html.replace(/^### (.*$)/gim, '<h3>$1</h3>');
-    html = html.replace(/^## (.*$)/gim, '<h2>$1</h2>');
-    html = html.replace(/^# (.*$)/gim, '<h1>$1</h1>');
+    html = html.replace(/^### (.*$)/gim, '<h3 style="font-size:1.25rem;font-weight:600;margin:1.5rem 0 0.5rem 0;color:#1f2937;">$1</h3>');
+    html = html.replace(/^## (.*$)/gim, '<h2 style="font-size:1.5rem;font-weight:600;margin:2rem 0 0.75rem 0;color:#1f2937;">$1</h2>');
+    html = html.replace(/^# (.*$)/gim, '<h1 style="font-size:2rem;font-weight:700;margin:2.5rem 0 1rem 0;color:#1f2937;">$1</h1>');
     
     // Bold and italic
     const boldRegex = /\\*\\*(.*?)\\*\\*/g;
@@ -1696,23 +1696,23 @@ class VeritasApp {
     // Links - build regex from string to avoid escaping issues
     const linkRegex = new RegExp('\\\\[([^\\\\]]+)\\\\]\\\\(([^)]+)\\\\)', 'g');
     html = html.replace(linkRegex, function(match, text, url) {
-      return '<a href="' + url + '" target="_blank" rel="noopener">' + text + '</a>';
+      return '<a href="' + url + '" target="_blank" rel="noopener" style="color:#2563eb;text-decoration:underline;">' + text + '</a>';
     });
     
     // Lists
     const bulletRegex = /^\\* (.*$)/gim;
     const numberRegex = /^\\d+\\. (.*$)/gim;
     const listWrapRegex = /(<li>.*<\\/li>\\n?)+/g;
-    html = html.replace(bulletRegex, '<li>$1</li>');
-    html = html.replace(numberRegex, '<li>$1</li>');
-    html = html.replace(listWrapRegex, '<ul>$&</ul>');
+    html = html.replace(bulletRegex, '<li style="margin:0.25rem 0;padding-left:0.5rem;">$1</li>');
+    html = html.replace(numberRegex, '<li style="margin:0.25rem 0;padding-left:0.5rem;">$1</li>');
+    html = html.replace(listWrapRegex, '<ul style="margin:1rem 0;padding-left:1.5rem;">$&</ul>');
     
     // Line breaks
-    html = html.replace(/\\n\\n/g, '</p><p>');
+    html = html.replace(/\\n\\n/g, '</p><p style="margin:1rem 0;line-height:1.7;max-width:100%;word-wrap:break-word;">');
     html = html.replace(/\\n/g, '<br>');
     
-    // Wrap in paragraph
-    html = '<p>' + html + '</p>';
+    // Wrap in responsive paragraph
+    html = '<div style="max-width:100%;overflow-wrap:break-word;word-wrap:break-word;hyphens:auto;"><p style="margin:1rem 0;line-height:1.7;max-width:100%;word-wrap:break-word;">' + html + '</p></div>';
     
     // Clean up
     html = html.replace(/<p><\\/p>/g, '');
@@ -1722,6 +1722,9 @@ class VeritasApp {
     html = html.replace(/(<\\/pre>)<\\/p>/g, '$1');
     html = html.replace(/<p>(<ul>)/g, '$1');
     html = html.replace(/(<\\/ul>)<\\/p>/g, '$1');
+    
+    // Wrap everything in a responsive container
+    html = '<div style="max-width:100%;padding:0 1rem;margin:0 auto;word-wrap:break-word;overflow-wrap:break-word;">' + html + '</div>';
     
     return html;
   }
@@ -2118,9 +2121,29 @@ class VeritasApp {
   '      </div>',
   '      <div>',
   '        <button id="ipfs-warm-cloudflare" class="btn">Warm Cloudflare</button>',
+  '        <button id="ipfs-test-storage" class="btn btn-secondary" style="margin-left:0.5rem;">Test storage.ma-atara.io</button>',
   '      </div>',
   '    </div>',
   '    <div id="ipfs-warm-status" style="margin-top: 0.5rem; display: none;"></div>',
+  '    <div id="ipfs-test-status" style="margin-top: 0.5rem; display: none;"></div>',
+  '  </section>',
+  '  <section class="card" style="margin: 1rem 0;">',
+  '    <h3 class="card-title">Ethereum Anchoring</h3>',
+  '    <div id="eth-wallet-info" class="alert" style="display:none; margin-bottom:0.75rem;"></div>',
+  '    <div class="grid" style="grid-template-columns: 1fr auto; gap: 0.75rem; align-items: end;">',
+  '      <div class="form-group">',
+  '        <label class="label" for="eth-super-root">Super-Root (0x…)</label>',
+  '        <input type="text" id="eth-super-root" class="input" placeholder="0x followed by 64 hex chars" />',
+  '      </div>',
+  '      <div>',
+  '        <button id="eth-compute-btn" class="btn btn-secondary" style="margin-right:0.5rem;">Compute Super-Root</button>',
+  '        <button id="eth-commit-btn" class="btn">Submit Commit</button>',
+  '        <button id="eth-ping-btn" class="btn btn-secondary" style="margin-left:0.5rem;">Ping RPC</button>',
+  '      </div>',
+  '    </div>',
+  '    <div id="eth-compute-status" style="margin-top: 0.5rem; display: none;"></div>',
+  '    <div id="eth-commit-status" style="margin-top: 0.5rem; display: none;"></div>',
+  '    <div id="eth-ping-status" style="margin-top: 0.5rem; display: none;"></div>',
   '  </section>',
       '  <div id="admin-content">',
       '    <div class="loading"><div class="spinner"></div><p>Loading pending transactions...</p></div>',
@@ -2274,6 +2297,45 @@ class VeritasApp {
         }
       });
     }
+    // Storage gateway CID test
+    const testBtn = document.getElementById('ipfs-test-storage');
+    const testStatus = document.getElementById('ipfs-test-status');
+    if (testBtn) {
+      testBtn.addEventListener('click', async () => {
+        try {
+          const cid = (warmCid && warmCid.value) ? warmCid.value.trim() : '';
+          if (!cid) {
+            if (testStatus) { testStatus.style.display = 'block'; testStatus.className = 'alert alert-error'; testStatus.textContent = 'Enter a valid IPFS CID.'; }
+            return;
+          }
+          if (!this.sessionToken) throw new Error('Session expired. Please log in again.');
+          testBtn.setAttribute('disabled','true');
+          if (testStatus) { testStatus.style.display = 'block'; testStatus.className = ''; testStatus.innerHTML = '<div class="loading"><div class="spinner"></div><p>Testing storage gateway…</p></div>'; }
+          const resp = await fetch('/api/vdc/ipfs/test/' + encodeURIComponent(cid), {
+            method: 'GET',
+            headers: { 'Authorization': 'Bearer ' + this.sessionToken, 'x-admin-secret': '' }
+          });
+          const data = await resp.json();
+          if (testStatus) {
+            const ok = !!data.success;
+            testStatus.style.display = 'block';
+            testStatus.className = ok ? 'alert alert-success' : 'alert alert-warning';
+            testStatus.innerHTML = ok
+              ? ('[OK] ' + this.escapeHtml(data.data.method) + ' ' + this.escapeHtml(data.data.url) + ' • ' + this.escapeHtml(String(data.data.status)) + ' in ' + this.escapeHtml(String(data.data.elapsedMs)) + 'ms')
+              : ('[WARN] Gateway test failed: ' + this.escapeHtml(data.error || 'unknown error'));
+          }
+        } catch (err) {
+          if (testStatus) {
+            testStatus.style.display = 'block';
+            testStatus.className = 'alert alert-error';
+            const msg = (err && typeof err === 'object' && err !== null && 'message' in err) ? String((err).message) : String(err);
+            testStatus.textContent = msg;
+          }
+        } finally {
+          testBtn.removeAttribute('disabled');
+        }
+      });
+    }
     const rebuildBtn = document.getElementById('rebuild-index-btn');
     const rebuildResult = document.getElementById('rebuild-index-result');
     
@@ -2313,6 +2375,166 @@ class VeritasApp {
           rebuildBtn.innerHTML = '<span style="margin-right: 0.5rem;">[SYNC]</span>Rebuild Transaction Indexes';
         }
       };
+    }
+
+    // Wire Ethereum commit button
+  const ethBtn = document.getElementById('eth-commit-btn');
+  const ethComputeBtn = document.getElementById('eth-compute-btn');
+  const ethSuperEl = document.getElementById('eth-super-root');
+    const ethStatus = document.getElementById('eth-commit-status');
+    const ethComputeStatus = document.getElementById('eth-compute-status');
+    const ethWalletInfo = document.getElementById('eth-wallet-info');
+    // Load system wallet address for convenience (no top-level await)
+    try {
+      if (this.sessionToken && ethWalletInfo) {
+        fetch('/api/vdc/ethereum/wallet', { headers: { 'Authorization': 'Bearer ' + this.sessionToken, 'x-admin-secret': '' } })
+          .then((resp) => resp.json())
+          .then((data) => {
+            if (data && data.success && data.data) {
+              const addr = data.data.address;
+              const configured = !!data.data.configured;
+              if (addr) {
+                const esc = this.escapeHtml(String(addr));
+                const etherscan = 'https://etherscan.io/address/' + esc;
+                ethWalletInfo.style.display = 'block';
+                ethWalletInfo.className = configured ? 'alert alert-success' : 'alert alert-warning';
+                ethWalletInfo.innerHTML = 'System wallet: <code>' + esc + '</code> ' +
+                  '<button class="btn btn-secondary btn-sm" id="copy-eth-address" style="margin-left:0.5rem;">Copy</button> ' +
+                  '<a href="' + etherscan + '" target="_blank" class="btn btn-sm" style="margin-left:0.5rem;">View on Etherscan</a>' +
+                  (configured ? '' : ' <span style="margin-left:0.5rem;">(private key not yet configured)</span>');
+                const copyBtn = document.getElementById('copy-eth-address');
+                if (copyBtn) copyBtn.addEventListener('click', () => this.copyToClipboard(addr));
+              }
+            }
+          })
+          .catch(() => {});
+      }
+    } catch {}
+    // Compute super-root using server endpoint (Maatara Core under the hood)
+    if (ethComputeBtn) {
+      ethComputeBtn.addEventListener('click', async () => {
+        try {
+          if (!this.sessionToken) throw new Error('Session expired. Please log in again.');
+          ethComputeBtn.setAttribute('disabled','true');
+          if (ethComputeStatus) {
+            ethComputeStatus.style.display = 'block';
+            ethComputeStatus.className = '';
+            ethComputeStatus.innerHTML = '<div class="loading"><div class="spinner"></div><p>Computing super-root across all blocks…</p></div>';
+          }
+          const resp = await fetch('/api/vdc/ethereum/super-root', {
+            method: 'GET',
+            headers: { 'Authorization': 'Bearer ' + this.sessionToken, 'x-admin-secret': '' }
+          });
+          const data = await resp.json();
+          if (!data.success) throw new Error(data.error || 'Super-root calculation failed');
+          const d = data.data || {};
+          const root = d.superRoot || '';
+          const latest = d.latestBlockNumber;
+          const count = d.count;
+          if (ethSuperEl && typeof (ethSuperEl).value !== 'undefined') {
+            try { (ethSuperEl).value = root; } catch {}
+          }
+          if (ethComputeStatus) {
+            ethComputeStatus.style.display = 'block';
+            ethComputeStatus.className = 'alert alert-success';
+            ethComputeStatus.innerHTML = '[OK] Super-root computed for ' + this.escapeHtml(String(count)) + ' blocks (latest #' + this.escapeHtml(String(latest)) + '): ' + this.escapeHtml(root);
+          }
+        } catch (err) {
+          if (ethComputeStatus) {
+            ethComputeStatus.style.display = 'block';
+            ethComputeStatus.className = 'alert alert-error';
+            const msg = (err && typeof err === 'object' && err !== null && 'message' in err) ? String(err.message) : String(err);
+            ethComputeStatus.textContent = msg;
+          }
+        } finally {
+          ethComputeBtn.removeAttribute('disabled');
+        }
+      });
+    }
+
+    if (ethBtn) {
+      ethBtn.addEventListener('click', async () => {
+        try {
+          let superRoot = '';
+          if (ethSuperEl && typeof (ethSuperEl).value !== 'undefined') {
+            try { superRoot = String((ethSuperEl).value || '').trim(); } catch {}
+          }
+          if (!superRoot || !/^0x[0-9a-fA-F]{64}$/.test(superRoot)) {
+            if (ethStatus) { ethStatus.style.display = 'block'; ethStatus.className = 'alert alert-error'; ethStatus.textContent = 'Enter a 0x-prefixed 64-hex super-root.'; }
+            return;
+          }
+          // Guardrail: gas cost confirmation
+          if (!window.confirm('This will submit an Ethereum transaction and pay gas from the system wallet. Continue?')) {
+            return;
+          }
+          if (!this.sessionToken) throw new Error('Session expired. Please log in again.');
+          ethBtn.setAttribute('disabled','true');
+          if (ethStatus) { ethStatus.style.display = 'block'; ethStatus.className = ''; ethStatus.innerHTML = '<div class="loading"><div class="spinner"></div><p>Submitting Ethereum commit…</p></div>'; }
+          const resp = await fetch('/api/vdc/ethereum/commit', {
+            method: 'POST',
+            headers: { 'Authorization': 'Bearer ' + this.sessionToken, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ superRoot })
+          });
+          const data = await resp.json();
+          if (!data.success) throw new Error(data.error || 'Commit failed');
+          const tx = data.data && data.data.txHash;
+          if (ethStatus) {
+            ethStatus.style.display = 'block';
+            ethStatus.className = 'alert alert-success';
+            const etherscan = 'https://etherscan.io/tx/';
+            const link = tx ? (' <a href="' + etherscan + this.escapeHtml(tx) + '" target="_blank">View on Etherscan</a>') : '';
+            ethStatus.innerHTML = 'Commit submitted: ' + (tx ? this.escapeHtml(tx) : '[mock]') + link;
+          }
+        } catch (err) {
+          if (ethStatus) {
+            ethStatus.style.display = 'block';
+            ethStatus.className = 'alert alert-error';
+            const msg = (err && typeof err === 'object' && err !== null && 'message' in err) ? String(err.message) : String(err);
+            ethStatus.textContent = msg;
+          }
+        } finally {
+          ethBtn.removeAttribute('disabled');
+        }
+      });
+    }
+    // Wire Ethereum RPC ping
+    const ethPingBtn = document.getElementById('eth-ping-btn');
+    const ethPingStatus = document.getElementById('eth-ping-status');
+    if (ethPingBtn) {
+      ethPingBtn.addEventListener('click', async () => {
+        try {
+          if (!this.sessionToken) throw new Error('Session expired. Please log in again.');
+          ethPingBtn.setAttribute('disabled', 'true');
+          if (ethPingStatus) {
+            ethPingStatus.style.display = 'block';
+            ethPingStatus.className = '';
+            ethPingStatus.innerHTML = '<div class="loading"><div class="spinner"></div><p>Pinging Ethereum RPC…</p></div>';
+          }
+          const resp = await fetch('/api/vdc/ethereum/ping', { headers: { 'Authorization': 'Bearer ' + this.sessionToken, 'x-admin-secret': '' } });
+          const data = await resp.json();
+          if (ethPingStatus) {
+            if (data.success) {
+              const cid = data.data && data.data.chainId;
+              const elapsed = data.data && data.data.elapsedMs;
+              const status = data.data && data.data.status;
+              ethPingStatus.className = 'alert alert-success';
+              ethPingStatus.innerHTML = '[OK] eth_chainId=' + this.escapeHtml(String(cid)) + ' • ' + this.escapeHtml(String(status)) + ' in ' + this.escapeHtml(String(elapsed)) + 'ms';
+            } else {
+              ethPingStatus.className = 'alert alert-error';
+              ethPingStatus.textContent = (data && data.error) ? String(data.error) : 'RPC ping failed';
+            }
+          }
+        } catch (err) {
+          if (ethPingStatus) {
+            ethPingStatus.style.display = 'block';
+            ethPingStatus.className = 'alert alert-error';
+            const msg = (err && typeof err === 'object' && err !== null && 'message' in err) ? String(err.message) : String(err);
+            ethPingStatus.textContent = msg;
+          }
+        } finally {
+          ethPingBtn.removeAttribute('disabled');
+        }
+      });
     }
 
     // Wire view logs button
@@ -2814,17 +3036,19 @@ class VeritasApp {
         asset.ethereumTxHash ? ('<div><strong>Ethereum tx</strong></div><div><a href="#" target="_blank">' + this.escapeHtml(asset.ethereumTxHash) + '</a></div>') : '',
         asset.ipfsHash ? (
           '<div><strong>IPFS</strong></div><div>' +
-          (asset.ipfsGatewayUrlPinata ? ('<a class="btn btn-link btn-sm" href="' + this.escapeHtml(asset.ipfsGatewayUrlPinata) + '" target="_blank">Open via Pinata</a>') : '') +
-          (asset.ipfsGatewayUrlCloudflare ? ('<a class="btn btn-link btn-sm" href="' + this.escapeHtml(asset.ipfsGatewayUrlCloudflare) + '" target="_blank" style="margin-left:0.5rem;">Open via Cloudflare</a>') : '') +
-          (asset.ipfsGatewayUrlPinata || asset.ipfsGatewayUrlCloudflare ? '' : ('<span class="text-muted">No gateway URL available</span>')) +
+          (asset.ipfsGatewayUrlPinata ? ('<a class="btn btn-link btn-sm" href="' + this.escapeHtml(asset.ipfsGatewayUrlPinata) + '" target="_blank">Pinata</a>') : '') +
+          '<a class="btn btn-link btn-sm" href="https://ipfs.io/ipfs/' + this.escapeHtml(asset.ipfsHash) + '" target="_blank" style="margin-left:0.5rem;">ipfs.io</a>' +
+          '<a class="btn btn-link btn-sm" href="https://dweb.link/ipfs/' + this.escapeHtml(asset.ipfsHash) + '" target="_blank" style="margin-left:0.5rem;">dweb.link</a>' +
+          '<a class="btn btn-link btn-sm" href="https://gateway.pinata.cloud/ipfs/' + this.escapeHtml(asset.ipfsHash) + '" target="_blank" style="margin-left:0.5rem;">pinata gw</a>' +
           '<div style="font-size:12px;color:#6b7280;word-break:break-all;">' + this.escapeHtml(asset.ipfsHash) + '</div>' +
           '</div>'
         ) : '',
         asset.ipfsMetadataHash ? (
           '<div><strong>Metadata</strong></div><div>' +
-          (asset.metadataGatewayUrlPinata ? ('<a class="btn btn-link btn-sm" href="' + this.escapeHtml(asset.metadataGatewayUrlPinata) + '" target="_blank">Open via Pinata</a>') : '') +
-          (asset.metadataGatewayUrlCloudflare ? ('<a class="btn btn-link btn-sm" href="' + this.escapeHtml(asset.metadataGatewayUrlCloudflare) + '" target="_blank" style="margin-left:0.5rem;">Open via Cloudflare</a>') : '') +
-          (asset.metadataGatewayUrlPinata || asset.metadataGatewayUrlCloudflare ? '' : ('<span class="text-muted">No gateway URL available</span>')) +
+          (asset.metadataGatewayUrlPinata ? ('<a class="btn btn-link btn-sm" href="' + this.escapeHtml(asset.metadataGatewayUrlPinata) + '" target="_blank">Pinata</a>') : '') +
+          '<a class="btn btn-link btn-sm" href="https://ipfs.io/ipfs/' + this.escapeHtml(asset.ipfsMetadataHash) + '" target="_blank" style="margin-left:0.5rem;">ipfs.io</a>' +
+          '<a class="btn btn-link btn-sm" href="https://dweb.link/ipfs/' + this.escapeHtml(asset.ipfsMetadataHash) + '" target="_blank" style="margin-left:0.5rem;">dweb.link</a>' +
+          '<a class="btn btn-link btn-sm" href="https://gateway.pinata.cloud/ipfs/' + this.escapeHtml(asset.ipfsMetadataHash) + '" target="_blank" style="margin-left:0.5rem;">pinata gw</a>' +
           '<div style="font-size:12px;color:#6b7280;word-break:break-all;">' + this.escapeHtml(asset.ipfsMetadataHash) + '</div>' +
           '</div>'
         ) : '',

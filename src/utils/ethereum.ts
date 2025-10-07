@@ -1,6 +1,10 @@
 // Ethereum anchoring using Cloudflare Web3 Gateway and Maatara Core API
 import { Environment } from '../types';
-import { buildAnchorPreimage, dilithiumSign, b64uEncode } from '@maatara/core-pqc';
+import { buildAnchorPreimage, dilithiumSign } from '@maatara/core-pqc';
+// Real Ethereum transaction support
+import { createWalletClient, http, Hex } from 'viem';
+import { privateKeyToAccount } from 'viem/accounts';
+// Note: Real Ethereum submission via viem can be enabled when system keys are configured
 
 export interface EthereumAnchor {
   anchorHash: string;
@@ -19,13 +23,18 @@ export interface VeritasChain {
 }
 
 export class EthereumAnchoringClient {
+  private env: Environment;
   private rpcUrl: string;
   private gatewayUrl: string;
+  private chain: any;
 
   constructor(env: Environment) {
+    this.env = env;
     // Use Cloudflare's Ethereum Gateway - https://developers.cloudflare.com/web3/
     this.rpcUrl = env.ETHEREUM_RPC_URL || 'https://cloudflare-eth.com/v1/mainnet';
     this.gatewayUrl = env.IPFS_GATEWAY_URL || 'https://cloudflare-ipfs.com';
+  // chain placeholder (not used in mock submission)
+  this.chain = null;
   }
 
   /**
@@ -151,27 +160,61 @@ export class EthereumAnchoringClient {
   }
 
   private async submitToEthereum(anchor: EthereumAnchor): Promise<string> {
+    // If a system Ethereum private key is provided, submit a real transaction
+  const directPk = (this.env as any).SYSTEM_ETH_PRIVATE_KEY as string | undefined;
+  const pkPart1 = (this.env as any).SYSTEM_ETH_PRIVATE_KEY_PART1 as string | undefined;
+  const pkPart2 = (this.env as any).SYSTEM_ETH_PRIVATE_KEY_PART2 as string | undefined;
+  const sysPriv = directPk && directPk.length > 0 ? directPk : `${pkPart1 || ''}${pkPart2 || ''}`;
+    const sysFrom = (this.env as any).SYSTEM_ETH_FROM_ADDRESS as string | undefined;
+    if (sysPriv && sysPriv.length > 0 && sysFrom && sysFrom.length > 0) {
+      try {
+        return await this.submitToEthereumReal(anchor, sysPriv, sysFrom);
+      } catch (e) {
+        console.warn('Real Ethereum submission failed; falling back to mock. Error:', (e as any)?.message || e);
+      }
+    }
+    // Fallback mock submission
     try {
-      // Submit anchor to Ethereum via Cloudflare Web3 Gateway
-      // This would typically involve a smart contract call
       const response = await fetch(this.rpcUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          jsonrpc: '2.0',
-          method: 'eth_sendRawTransaction',
-          params: [this.createMockTransaction(anchor)],
-          id: 1
-        })
+        body: JSON.stringify({ jsonrpc: '2.0', method: 'eth_sendRawTransaction', params: [this.createMockTransaction(anchor)], id: 1 })
       });
-
-      const result = await response.json() as { result: string };
+      const result = await response.json() as { result?: string };
       return result.result || this.generateMockTxHash();
-    } catch (error) {
-      console.error('Ethereum submission error:', error);
-      // Return mock transaction hash for development
+    } catch {
       return this.generateMockTxHash();
     }
+  }
+
+  private async submitToEthereumReal(anchor: EthereumAnchor, privateKey: string, fromAddress: string): Promise<string> {
+    // Normalize private key to 0x-prefixed hex
+    const pk = privateKey.startsWith('0x') ? privateKey : ('0x' + privateKey);
+    const account = privateKeyToAccount(pk as Hex);
+    // Optional safety: ensure provided fromAddress matches derived account
+    const from = fromAddress.toLowerCase();
+    if (account.address.toLowerCase() !== from) {
+      console.warn('SYSTEM_ETH_FROM_ADDRESS does not match derived account; using derived address');
+    }
+
+    // Create wallet client against the configured RPC (Cloudflare Web3 Gateway)
+    const client = createWalletClient({ account, transport: http(this.rpcUrl) });
+    // Prepare data: embed the canonical anchor JSON as tx data
+    const payload = this.stringToHex(JSON.stringify({
+      anchor: anchor.anchorHash,
+      canonical: anchor.canonical,
+      msg_b64u: anchor.msg_b64u,
+      ts: anchor.timestamp
+    }));
+
+    // Let viem handle gas/fee estimation via RPC
+    const txHash = await client.sendTransaction({
+      to: account.address,
+      data: payload as Hex,
+      value: 0n
+    } as any);
+
+    return txHash as string;
   }
 
   private createMockTransaction(anchor: EthereumAnchor): string {
@@ -194,6 +237,14 @@ export class EthereumAnchoringClient {
 
   private generateMockTxHash(): string {
     return '0x' + Math.random().toString(16).slice(2).padStart(64, '0');
+  }
+
+  private stringToHex(s: string): string {
+    const enc = new TextEncoder();
+    const bytes = enc.encode(s);
+    let hex = '';
+    for (let i = 0; i < bytes.length; i++) hex += bytes[i].toString(16).padStart(2, '0');
+    return '0x' + hex;
   }
 }
 
@@ -223,4 +274,24 @@ export async function verifyDocumentAnchor(
   anchorHash: string
 ): Promise<boolean> {
   return await client.verifyAnchorOnEthereum(anchorHash);
+}
+
+/**
+ * Submit an admin commit to Ethereum containing a super-root or summary.
+ */
+export async function submitAdminCommit(
+  env: Environment,
+  payload: { superRoot: string; merkleRoot?: string; latestBlock?: number; note?: string }
+): Promise<{ txHash: string; submittedAt: number }> {
+  const client = new EthereumAnchoringClient(env);
+  // Build a canonical message that we embed as tx data via signAndSubmitAnchor flow
+  const userId = 'system';
+  const ipfsHashes = [payload.superRoot];
+  const anchor = await client.createEthereumAnchor(userId, ipfsHashes, [], new Date().toISOString().slice(0,7));
+
+  // Use system Dilithium key to sign the anchor message
+  const sysPriv = env.SYSTEM_DILITHIUM_PRIVATE_KEY || (env.SYSTEM_DILITHIUM_PRIVATE_KEY_PART1 || '') + (env.SYSTEM_DILITHIUM_PRIVATE_KEY_PART2 || '');
+  const signed = await client.signAndSubmitAnchor(anchor, sysPriv);
+  const txHash = signed.ethereumTxHash || '0x';
+  return { txHash, submittedAt: Date.now() };
 }

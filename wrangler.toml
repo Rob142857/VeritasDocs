@@ -12,7 +12,7 @@ fallthrough = true
 [vars]
 ENVIRONMENT = "production"
 MAATARA_API_BASE = "https://maatara-core-worker.rme-6e5.workers.dev"
-ETHEREUM_RPC_URL = "https://cloudflare-eth.com/v1/mainnet"
+ETHEREUM_RPC_URL = "https://cloudflare-eth.com"
 IPFS_GATEWAY_URL = "https://cloudflare-ipfs.com"
 PINATA_GATEWAY_URL = "https://green-advisory-crane-736.mypinata.cloud"
 
@@ -31,7 +31,7 @@ name = "veritas-docs-production"
 [env.production.vars]
 ENVIRONMENT = "production"
 MAATARA_API_BASE = "https://maatara-core-worker.rme-6e5.workers.dev"
-ETHEREUM_RPC_URL = "https://cloudflare-eth.com/v1/mainnet"
+ETHEREUM_RPC_URL = "https://cloudflare-eth.com"
 IPFS_GATEWAY_URL = "https://cloudflare-ipfs.com"
 PINATA_GATEWAY_URL = "https://green-advisory-crane-736.mypinata.cloud"
 AUTO_MINE_ON_PAYMENT = "true"

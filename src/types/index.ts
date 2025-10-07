@@ -124,6 +124,11 @@ export interface Environment {
   ETHEREUM_RPC_URL: string;
   VERITAS_CONTRACT_ADDRESS: string;
   ETHEREUM_PRIVATE_KEY: string;
+  // Optional override network name (mainnet|sepolia)
+  ETHEREUM_NETWORK?: string;
+  // Optional system wallet used for admin commits
+  SYSTEM_ETH_PRIVATE_KEY?: string;
+  SYSTEM_ETH_FROM_ADDRESS?: string;
   IPFS_GATEWAY_URL: string;
   PINATA_API_KEY?: string;
   PINATA_SECRET_KEY?: string;

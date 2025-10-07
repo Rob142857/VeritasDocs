@@ -163,6 +163,43 @@ export class MaataraClient {
       transactions: []
     };
   }
+
+  // Compute a deterministic super-root using Maatara Core service; fallback to local SHA-256 concat
+  async computeSuperRoot(hashes: string[]): Promise<string> {
+    if (!Array.isArray(hashes) || hashes.length === 0) {
+      throw new Error('No hashes provided to compute super-root');
+    }
+    const base = (this.env as any).MAATARA_API_BASE || 'https://maatara-core-worker.rme-6e5.workers.dev';
+    try {
+      const resp = await fetch(base.replace(/\/$/, '') + '/api/super-root', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ hashes })
+      });
+      const contentType = resp.headers.get('content-type') || '';
+      if (!resp.ok) {
+        const text = contentType.includes('application/json') ? JSON.stringify(await resp.json()) : await resp.text();
+        throw new Error(`Maatara super-root failed: ${resp.status} ${text?.slice(0, 200)}`);
+      }
+      const json: any = contentType.includes('application/json') ? await resp.json() : null;
+      const root = json?.superRoot || json?.super_root || json?.data?.superRoot;
+      if (typeof root === 'string' && /^0x[0-9a-fA-F]{64}$/.test(root)) {
+        return root;
+      }
+      // If API returns something else, fallback below
+    } catch (e) {
+      console.warn('Maatara computeSuperRoot error, falling back to local:', (e as any)?.message || e);
+    }
+
+    // Fallback: local SHA-256 over concatenated hashes
+    const encoder = new TextEncoder();
+    const input = encoder.encode(hashes.join(''));
+    const digest = await crypto.subtle.digest('SHA-256', input);
+    const bytes = new Uint8Array(digest);
+    let hex = '';
+    for (let i = 0; i < bytes.length; i++) hex += bytes[i].toString(16).padStart(2, '0');
+    return '0x' + hex;
+  }
 }
 
 export function generateMnemonic(): string {

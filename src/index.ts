@@ -1282,14 +1282,16 @@ class VeritasApp {
         .nav-dropdown-btn {
           background: none;
           border: none;
-          color: #64748b;
+          color: var(--text-secondary);
           cursor: pointer;
-          padding: 0.5rem 1rem;
+          padding: 0;
           font-size: 1rem;
+          font-weight: 500;
           transition: color 0.2s;
+          font-family: inherit;
         }
         .nav-dropdown-btn:hover, .nav-dropdown-btn.active {
-          color: #2563eb;
+          color: var(--primary-color);
         }
         .nav-dropdown-content {
           display: none;

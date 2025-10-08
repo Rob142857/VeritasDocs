@@ -11,7 +11,7 @@
 
 ## 🎯 Welcome to Veritas Documents!
 
-**Veritas Documents** is a secure platform for storing legal documents using post-quantum cryptography. This guide will walk you through every step, from receiving your invitation to managing your documents.
+**Veritas Documents** is a secure platform for storing deeds and legal documents using post-quantum cryptography. This guide will walk you through every step, from receiving your invitation to managing your documents.
 
 **Important Security Notes:**
 - 🔐 Your private keys are generated in your browser and never sent to our servers

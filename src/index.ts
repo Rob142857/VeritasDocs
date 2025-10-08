@@ -3657,7 +3657,6 @@ app.get('/activate', (c) => c.html(appHTML));
 app.get('/dashboard', (c) => c.html(appHTML));
 app.get('/create-asset', (c) => c.html(appHTML));
 app.get('/search', (c) => c.html(appHTML));
-app.get('/docs', (c) => c.html(appHTML));
 
 // Keypack activation and login pages (new flow)
 app.get('/activate-keypack.html', async (c) => {
@@ -3684,6 +3683,29 @@ app.get('/login-keypack.html', async (c) => {
   // Fallback to bundled public file
   const fallback = `<!DOCTYPE html><html><head><meta http-equiv="refresh" content="0; url=/public/login-keypack.html"><title>Redirecting…</title></head><body>Redirecting…</body></html>`;
   return c.html(fallback);
+});
+
+// Documentation portal and Cloudflare resources pages
+app.get('/docs', async (c) => {
+  try {
+    const env = c.env;
+    const r2 = await env.VDC_STORAGE?.get('static/docs.html');
+    if (r2) {
+      return c.html(await r2.text());
+    }
+  } catch {}
+  return c.html(`<!DOCTYPE html><html><head><title>Documentation</title></head><body><h1>Documentation Portal</h1><p>Loading...</p></body></html>`);
+});
+
+app.get('/cloudflare-resources', async (c) => {
+  try {
+    const env = c.env;
+    const r2 = await env.VDC_STORAGE?.get('static/cloudflare-resources.html');
+    if (r2) {
+      return c.html(await r2.text());
+    }
+  } catch {}
+  return c.html(`<!DOCTYPE html><html><head><title>Cloudflare Resources</title></head><body><h1>Cloudflare Resources</h1><p>Loading...</p></body></html>`);
 });
 
 // Web3 Demo page - serve static demo file

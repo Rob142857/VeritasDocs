@@ -10,6 +10,8 @@ const BUCKET = process.env.R2_BUCKET_NAME || 'veritas-docs-production-storage';
 const files = [
   'activate-keypack.html',
   'login-keypack.html',
+  'docs.html',
+  'cloudflare-resources.html',
 ];
 
 function sh(cmd, args) {

@@ -3651,6 +3651,29 @@ const appHTML = `
 </html>
 `;
 
+// Documentation portal and Cloudflare resources pages (MUST come before SPA routes)
+app.get('/docs', async (c) => {
+  try {
+    const env = c.env;
+    const r2 = await env.VDC_STORAGE?.get('static/docs.html');
+    if (r2) {
+      return c.html(await r2.text());
+    }
+  } catch {}
+  return c.html(`<!DOCTYPE html><html><head><title>Documentation</title></head><body><h1>Documentation Portal</h1><p>Loading...</p></body></html>`);
+});
+
+app.get('/cloudflare-resources', async (c) => {
+  try {
+    const env = c.env;
+    const r2 = await env.VDC_STORAGE?.get('static/cloudflare-resources.html');
+    if (r2) {
+      return c.html(await r2.text());
+    }
+  } catch {}
+  return c.html(`<!DOCTYPE html><html><head><title>Cloudflare Resources</title></head><body><h1>Cloudflare Resources</h1><p>Loading...</p></body></html>`);
+});
+
 // Serve the main application (SPA - handles client-side routing)
 app.get('/', (c) => c.html(appHTML));
 app.get('/activate', (c) => c.html(appHTML));
@@ -3683,29 +3706,6 @@ app.get('/login-keypack.html', async (c) => {
   // Fallback to bundled public file
   const fallback = `<!DOCTYPE html><html><head><meta http-equiv="refresh" content="0; url=/public/login-keypack.html"><title>Redirecting…</title></head><body>Redirecting…</body></html>`;
   return c.html(fallback);
-});
-
-// Documentation portal and Cloudflare resources pages
-app.get('/docs', async (c) => {
-  try {
-    const env = c.env;
-    const r2 = await env.VDC_STORAGE?.get('static/docs.html');
-    if (r2) {
-      return c.html(await r2.text());
-    }
-  } catch {}
-  return c.html(`<!DOCTYPE html><html><head><title>Documentation</title></head><body><h1>Documentation Portal</h1><p>Loading...</p></body></html>`);
-});
-
-app.get('/cloudflare-resources', async (c) => {
-  try {
-    const env = c.env;
-    const r2 = await env.VDC_STORAGE?.get('static/cloudflare-resources.html');
-    if (r2) {
-      return c.html(await r2.text());
-    }
-  } catch {}
-  return c.html(`<!DOCTYPE html><html><head><title>Cloudflare Resources</title></head><body><h1>Cloudflare Resources</h1><p>Loading...</p></body></html>`);
 });
 
 // Web3 Demo page - serve static demo file

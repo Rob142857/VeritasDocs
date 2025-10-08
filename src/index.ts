@@ -2754,6 +2754,13 @@ class VeritasApp {
           const d = data.data || {};
           const lines = [];
           if (d.rpc && (d.rpc.chainId || d.rpc.status)) lines.push('RPC chainId=' + this.escapeHtml(String(d.rpc.chainId)) + ' • status ' + this.escapeHtml(String(d.rpc.status)));
+          if (d.rpc && d.rpc.gasPriceSource) {
+            const src = String(d.rpc.gasPriceSource);
+            lines.push('gasPrice source: ' + this.escapeHtml(src));
+            if (src === 'base-only') {
+              lines.push('using base fee only (no tip)');
+            }
+          }
           // Compute gas details
           let feeEthStr = null;
           try {

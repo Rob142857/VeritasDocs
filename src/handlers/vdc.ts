@@ -361,6 +361,29 @@ vdcHandler.post('/ethereum/verify', async (c) => {
       } catch {}
     }
 
+    // Fallback 2: get latest block and use baseFeePerGas
+    if (!rpcResults.gasPrice) {
+      try {
+        const gbReq = { jsonrpc: '2.0', id: 23, method: 'eth_getBlockByNumber', params: ['latest', false] };
+        const r = await fetch(rpcUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(gbReq) });
+        const j: any = await r.json();
+        const bf = j?.result?.baseFeePerGas;
+        if (typeof bf === 'string' && /^0x[0-9a-fA-F]+$/.test(bf)) {
+          rpcResults.gasPrice = bf;
+          rpcResults.gasPriceSource = 'block.baseFeePerGas';
+        }
+      } catch {}
+    }
+
+    // Enforce base-only gas price to mirror Etherscan base estimate
+    // If a base fee was obtained via feeHistory or block, prefer it over eth_gasPrice
+    try {
+      // If source includes baseFeePerGas or block.baseFeePerGas, normalize to base-only label
+      if (rpcResults.gasPriceSource === 'baseFeePerGas' || rpcResults.gasPriceSource === 'block.baseFeePerGas') {
+        rpcResults.gasPriceSource = 'base-only';
+      }
+    } catch {}
+
     // eth_estimateGas if from address is configured
     const from = (env as any).SYSTEM_ETH_FROM_ADDRESS as string | undefined;
     if (from && from.length > 0) {

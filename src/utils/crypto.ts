@@ -34,6 +34,11 @@ export class MaataraClient {
     this.env = env;
   }
 
+  // Public method to ensure PQC WASM is initialized
+  async ready(): Promise<void> {
+    await this.ensureWasm();
+  }
+
   private async ensureWasm(): Promise<void> {
     if (!MaataraClient.wasmInitPromise) {
       MaataraClient.wasmInitPromise = (async () => {

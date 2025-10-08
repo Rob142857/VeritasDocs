@@ -2479,11 +2479,13 @@ class VeritasApp {
   '      </div>',
   '      <div>',
   '        <button id="eth-compute-btn" class="btn btn-secondary" style="margin-right:0.5rem;">Compute Super-Root</button>',
+  '        <button id="eth-verify-btn" class="btn btn-secondary" style="margin-right:0.5rem;">Verify Payload</button>',
   '        <button id="eth-commit-btn" class="btn">Submit Commit</button>',
   '        <button id="eth-ping-btn" class="btn btn-secondary" style="margin-left:0.5rem;">Ping RPC</button>',
   '      </div>',
   '    </div>',
   '    <div id="eth-compute-status" style="margin-top: 0.5rem; display: none;"></div>',
+  '    <div id="eth-verify-status" style="margin-top: 0.5rem; display: none;"></div>',
   '    <div id="eth-commit-status" style="margin-top: 0.5rem; display: none;"></div>',
   '    <div id="eth-ping-status" style="margin-top: 0.5rem; display: none;"></div>',
   '  </section>',
@@ -2721,10 +2723,107 @@ class VeritasApp {
 
     // Wire Ethereum commit button
   const ethBtn = document.getElementById('eth-commit-btn');
+  const ethVerifyBtn = document.getElementById('eth-verify-btn');
   const ethComputeBtn = document.getElementById('eth-compute-btn');
   const ethSuperEl = document.getElementById('eth-super-root');
     const ethStatus = document.getElementById('eth-commit-status');
+    const ethVerifyStatus = document.getElementById('eth-verify-status');
     const ethComputeStatus = document.getElementById('eth-compute-status');
+    // Verify payload (no on-chain submission)
+    if (ethVerifyBtn) {
+      ethVerifyBtn.addEventListener('click', async () => {
+        try {
+          let superRoot = '';
+          if (ethSuperEl && typeof (ethSuperEl).value !== 'undefined') {
+            try { superRoot = String((ethSuperEl).value || '').trim(); } catch {}
+          }
+          if (!superRoot || !/^0x[0-9a-fA-F]{64}$/.test(superRoot)) {
+            if (ethVerifyStatus) { ethVerifyStatus.style.display = 'block'; ethVerifyStatus.className = 'alert alert-error'; ethVerifyStatus.textContent = 'Enter a 0x-prefixed 64-hex super-root.'; }
+            return;
+          }
+          if (!this.sessionToken) throw new Error('Session expired. Please log in again.');
+          ethVerifyBtn.setAttribute('disabled','true');
+          if (ethVerifyStatus) { ethVerifyStatus.style.display = 'block'; ethVerifyStatus.className = ''; ethVerifyStatus.innerHTML = '<div class="loading"><div class="spinner"></div><p>Verifying payload and RPC…</p></div>'; }
+          const resp = await fetch('/api/vdc/ethereum/verify', {
+            method: 'POST',
+            headers: { 'Authorization': 'Bearer ' + this.sessionToken, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ superRoot })
+          });
+          const data = await resp.json();
+          if (!data.success) throw new Error(data.error || 'Verification failed');
+          const d = data.data || {};
+          const lines = [];
+          if (d.rpc && (d.rpc.chainId || d.rpc.status)) lines.push('RPC chainId=' + this.escapeHtml(String(d.rpc.chainId)) + ' • status ' + this.escapeHtml(String(d.rpc.status)));
+          // Compute gas details
+          let feeEthStr = null;
+          try {
+            const gasHex = d.rpc && d.rpc.gasPrice ? String(d.rpc.gasPrice) : null;
+            const estGasHex = d.rpc && d.rpc.estimateGas ? String(d.rpc.estimateGas) : null;
+            // Helper to format bigint with decimals
+            const formatUnits = (bn, decimals) => {
+              const base = 10n ** BigInt(decimals);
+              const integer = bn / base;
+              const fraction = bn % base;
+              let fracStr = fraction.toString().padStart(decimals, '0');
+              fracStr = fracStr.replace(/0+$/, '');
+              return fracStr.length ? integer.toString() + '.' + fracStr : integer.toString();
+            };
+            // Gas price
+            if (gasHex) {
+              const gasWei = BigInt(gasHex);
+              const gasGwei = formatUnits(gasWei, 9);
+              lines.push('gasPrice=' + this.escapeHtml(gasHex) + ' (' + this.escapeHtml(gasGwei) + ' gwei)');
+              // Fee estimate
+              if (estGasHex) {
+                const gasUnits = BigInt(estGasHex);
+                const feeWei = gasWei * gasUnits;
+                feeEthStr = formatUnits(feeWei, 18);
+                lines.push('est. fee ≈ ' + this.escapeHtml(feeEthStr) + ' ETH');
+              }
+            }
+          } catch {}
+          if (d.rpc && d.rpc.estimateGasNote && !d.rpc.estimateGas) {
+            lines.push('estimateGas=' + this.escapeHtml(String(d.rpc.estimateGasNote)));
+          }
+          // Optional fiat conversion (best-effort)
+          try {
+            if (feeEthStr) {
+              const r = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd,aud', { cache: 'no-store' });
+              if (r.ok) {
+                const p = await r.json();
+                const usd = p && p.ethereum && p.ethereum.usd;
+                const aud = p && p.ethereum && p.ethereum.aud;
+                const fee = parseFloat(feeEthStr);
+                if (!isNaN(fee)) {
+                  if (typeof usd === 'number') {
+                    lines.push('≈ ' + this.escapeHtml((fee * usd).toFixed(2)) + ' USD');
+                  }
+                  if (typeof aud === 'number') {
+                    lines.push('≈ ' + this.escapeHtml((fee * aud).toFixed(2)) + ' AUD');
+                  }
+                }
+              }
+            }
+          } catch {}
+          lines.push('anchorHash=' + this.escapeHtml(String(d.anchor && d.anchor.anchorHash)));
+          lines.push('payload bytes (hex) ~ ' + this.escapeHtml(String(d.payload && d.payload.dataHexLength)));
+          if (ethVerifyStatus) {
+            ethVerifyStatus.style.display = 'block';
+            ethVerifyStatus.className = 'alert alert-success';
+            ethVerifyStatus.innerHTML = lines.map((l)=>'<div>'+l+'</div>').join('');
+          }
+        } catch (err) {
+          if (ethVerifyStatus) {
+            ethVerifyStatus.style.display = 'block';
+            ethVerifyStatus.className = 'alert alert-error';
+            const msg = (err && typeof err === 'object' && err !== null && 'message' in err) ? String(err.message) : String(err);
+            ethVerifyStatus.textContent = msg;
+          }
+        } finally {
+          ethVerifyBtn.removeAttribute('disabled');
+        }
+      });
+    }
     const ethWalletInfo = document.getElementById('eth-wallet-info');
     // Load system wallet address for convenience (no top-level await)
     try {
@@ -3326,6 +3425,10 @@ class VeritasApp {
       const result = await response.json();
       
       const container = document.getElementById('user-assets');
+      if (!container) {
+        console.warn('[UI] user-assets container not found; skipping asset render for this view');
+        return;
+      }
       if (result.success && (result.data.pending?.length > 0 || result.data.confirmed?.length > 0)) {
         const allAssets = [...(result.data.pending || []), ...(result.data.confirmed || [])];
         
@@ -3343,16 +3446,23 @@ class VeritasApp {
           '</div>'
         )).join('') + '</div>';
         
-        document.getElementById('owned-count').textContent = result.data.confirmed?.length || 0;
-        document.getElementById('created-count').textContent = allAssets.length;
+        const ownedEl = document.getElementById('owned-count');
+        const createdEl = document.getElementById('created-count');
+        if (ownedEl) ownedEl.textContent = String(result.data.confirmed?.length || 0);
+        if (createdEl) createdEl.textContent = String(allAssets.length);
       } else {
         container.innerHTML = '<p class="text-center text-muted">No assets found. Create your first asset to get started!</p>';
-        document.getElementById('owned-count').textContent = '0';
-        document.getElementById('created-count').textContent = '0';
+        const ownedEl = document.getElementById('owned-count');
+        const createdEl = document.getElementById('created-count');
+        if (ownedEl) ownedEl.textContent = '0';
+        if (createdEl) createdEl.textContent = '0';
       }
     } catch (error) {
       console.error('Failed to load assets:', error);
-      document.getElementById('user-assets').innerHTML = '<div class="alert alert-error">Failed to load assets</div>';
+      const container = document.getElementById('user-assets');
+      if (container) {
+        container.innerHTML = '<div class="alert alert-error">Failed to load assets</div>';
+      }
     }
   }
 

@@ -1,6 +1,7 @@
 // Ethereum anchoring using Cloudflare Web3 Gateway and Maatara Core API
 import { Environment } from '../types';
 import { buildAnchorPreimage, dilithiumSign } from '@maatara/core-pqc';
+import { MaataraClient } from './crypto';
 // Real Ethereum transaction support
 import { createWalletClient, http, Hex } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
@@ -45,12 +46,19 @@ export class EthereumAnchoringClient {
     userId: string,
     ipfsHashes: string[],
     ethereumHashes: string[] = [],
-    epoch: string = new Date().toISOString().slice(0, 7) // YYYY-MM format
+    epoch: string = new Date().toISOString().slice(0, 7), // YYYY-MM format
+    rootHexOverride?: string
   ): Promise<EthereumAnchor> {
     try {
+      // Ensure PQC WASM is initialized before using @maatara/core-pqc
+      const maatara = new MaataraClient(this.env as any);
+      await maatara.ready();
+
       // Create combined root hash from all IPFS hashes
       const combinedData = ipfsHashes.join('');
-      const rootHex = this.createSimpleHash(combinedData);
+      const rootHex = rootHexOverride && /^0x[0-9a-fA-F]{64}$/.test(rootHexOverride)
+        ? rootHexOverride
+        : this.createSimpleHash(combinedData);
 
       // Create Veritas chain structure for Maatara anchoring
       const chains: VeritasChain = {
@@ -60,12 +68,7 @@ export class EthereumAnchoringClient {
       };
 
       // Use Maatara's buildAnchorPreimage for deterministic anchoring
-      const preimage = await buildAnchorPreimage(
-        userId,
-        rootHex,
-        epoch,
-        chains
-      );
+      const preimage = await buildAnchorPreimage(userId, rootHex, epoch, chains);
 
       // Validate returned values to satisfy type safety
       if (!preimage || !preimage.canonical || !preimage.msg_b64u) {

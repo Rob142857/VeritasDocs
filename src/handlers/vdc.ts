@@ -3,7 +3,7 @@ import { Environment, APIResponse, User } from '../types';
 import { initializeVDC } from '../utils/blockchain';
 import { IPFSClient } from '../utils/ipfs';
 import { storeChainBlock } from '../utils/store';
-import { submitAdminCommit } from '../utils/ethereum';
+import { submitAdminCommit, EthereumAnchoringClient } from '../utils/ethereum';
 import { MaataraClient } from '../utils/crypto';
 
 const vdcHandler = new Hono<{ Bindings: Environment }>();
@@ -176,9 +176,24 @@ vdcHandler.post('/ethereum/commit', async (c) => {
       }
     } catch {}
 
-    const adminSecret = extractAdminSecret(c.req.header('x-admin-secret'), body);
-    const authError = ensureAdminAccess(c, adminSecret);
-    if (authError) return authError;
+    // Accept either session-based admin auth or admin secret header/body (consistent with other endpoints)
+    let isAdmin = false;
+    const user = await authenticateUser(c);
+    if (user && user.accountType === 'admin') {
+      isAdmin = true;
+    } else {
+      const adminSecret = extractAdminSecret(c.req.header('x-admin-secret'), body);
+      const authError = ensureAdminAccess(c, adminSecret);
+      if (!authError) {
+        isAdmin = true;
+      } else {
+        return authError; // 401/500 depending on config
+      }
+    }
+
+    if (!isAdmin) {
+      return c.json<APIResponse>({ success: false, error: 'Admin access required' }, 403);
+    }
 
     const { superRoot, latestBlock, note } = body || {};
     if (!superRoot || typeof superRoot !== 'string') {
@@ -252,6 +267,110 @@ vdcHandler.get('/ethereum/ping', async (c) => {
     return c.json<APIResponse>({ success: false, error: errMsg, data: { elapsedMs: elapsed, status: resp.status, url: rpcUrl } }, 502);
   } catch (error: any) {
     return c.json<APIResponse>({ success: false, error: error?.message || 'RPC ping failed' }, 500);
+  }
+});
+
+// Admin: verify an Ethereum payload (no on-chain submission) and RPC connectivity
+vdcHandler.post('/ethereum/verify', async (c) => {
+  try {
+    let body: any = {};
+    try {
+      if (c.req.header('content-type')?.includes('application/json')) {
+        body = await c.req.json();
+      }
+    } catch {}
+
+    // Accept either session-based admin auth or admin secret
+    let isAdmin = false;
+    const user = await authenticateUser(c);
+    if (user && user.accountType === 'admin') {
+      isAdmin = true;
+    } else {
+      const adminSecret = extractAdminSecret(c.req.header('x-admin-secret'), body);
+      const authError = ensureAdminAccess(c, adminSecret);
+      if (!authError) isAdmin = true; else return authError;
+    }
+
+    if (!isAdmin) {
+      return c.json<APIResponse>({ success: false, error: 'Admin access required' }, 403);
+    }
+
+    const { superRoot } = body || {};
+    if (!superRoot || typeof superRoot !== 'string' || !/^0x[0-9a-fA-F]{64}$/.test(superRoot)) {
+      return c.json<APIResponse>({ success: false, error: 'Valid superRoot (0x + 64 hex) is required' }, 400);
+    }
+
+    const env = c.env as Environment;
+  const client = new EthereumAnchoringClient(env);
+  // Build the canonical anchor payload (no signing, no submit), use provided superRoot
+  const anchor = await client.createEthereumAnchor('system', [superRoot], [], new Date().toISOString().slice(0,7), superRoot);
+
+    // Build the tx data payload as hex (same shape as real submission)
+    const payloadObj = {
+      anchor: anchor.anchorHash,
+      canonical: anchor.canonical,
+      msg_b64u: anchor.msg_b64u,
+      ts: anchor.timestamp
+    };
+    const encoder = new TextEncoder();
+    const bytes = encoder.encode(JSON.stringify(payloadObj));
+    let dataHex = '0x';
+    for (let i = 0; i < bytes.length; i++) dataHex += bytes[i].toString(16).padStart(2, '0');
+
+    // RPC checks
+    const rpcUrl = env.ETHEREUM_RPC_URL;
+    const rpcResults: any = {};
+    // eth_chainId
+    try {
+      const resp = await fetch(rpcUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_chainId', params: [] }) });
+  const json: any = await resp.json();
+  rpcResults.chainId = (json && json.result) || null;
+      rpcResults.status = resp.status;
+    } catch (e: any) {
+      rpcResults.chainIdError = e?.message || String(e);
+    }
+
+    // eth_gasPrice
+    try {
+      const resp = await fetch(rpcUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'eth_gasPrice', params: [] }) });
+  const json: any = await resp.json();
+  rpcResults.gasPrice = (json && json.result) || null;
+    } catch (e: any) {
+      rpcResults.gasPriceError = e?.message || String(e);
+    }
+
+    // eth_estimateGas if from address is configured
+    const from = (env as any).SYSTEM_ETH_FROM_ADDRESS as string | undefined;
+    if (from && from.length > 0) {
+      try {
+        const params = [{ from, to: from, data: dataHex, value: '0x0' }];
+        const resp = await fetch(rpcUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 3, method: 'eth_estimateGas', params }) });
+  const json: any = await resp.json();
+  rpcResults.estimateGas = (json && json.result) || null;
+      } catch (e: any) {
+        rpcResults.estimateGasError = e?.message || String(e);
+      }
+    } else {
+      rpcResults.estimateGas = null;
+      rpcResults.estimateGasNote = 'SYSTEM_ETH_FROM_ADDRESS not configured; skipping gas estimation';
+    }
+
+    return c.json<APIResponse>({
+      success: true,
+      data: {
+        superRoot,
+        anchor: {
+          anchorHash: anchor.anchorHash,
+          canonicalLength: anchor.canonical.length,
+          msgLength: anchor.msg_b64u.length,
+          timestamp: anchor.timestamp
+        },
+        payload: { dataHexLength: dataHex.length },
+        rpc: rpcResults
+      }
+    });
+  } catch (error: any) {
+    return c.json<APIResponse>({ success: false, error: error?.message || 'Verification failed' }, 500);
   }
 });
 

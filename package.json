@@ -6,10 +6,11 @@
   "main": "src/index.ts",
   "scripts": {
     "dev": "wrangler dev",
-    "deploy": "npm run build:frontend && npm run upload-docs && npm run upload-frontend && wrangler deploy",
+  "deploy": "npm run build && npm run build:frontend && npm run upload-docs && npm run upload-frontend && npm run upload-static-html && wrangler deploy -e production",
     "build": "tsc",
     "build:frontend": "node esbuild.frontend.js",
-    "upload-frontend": "node scripts/upload-frontend.js",
+  "upload-frontend": "node scripts/upload-frontend.js",
+  "upload-static-html": "node scripts/upload-static-html.js",
     "upload-docs": "node scripts/upload-docs.js",
     "test": "vitest",
     "lint": "eslint src/**/*.ts",

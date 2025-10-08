@@ -42,6 +42,18 @@
     "keywords": []
   },
   {
+    "slug": "STORAGE_ARCHITECTURE",
+    "file": "STORAGE_ARCHITECTURE.md",
+    "version": "2.0.0",
+    "lastUpdated": "October 7, 2025",
+    "status": "Production Implementation",
+    "audience": "Technical, Legal, Research",
+    "category": "Documentation",
+    "priority": 99,
+    "title": "Storage Architecture and Privacy Framework\r",
+    "keywords": []
+  },
+  {
     "slug": "ZERO_KNOWLEDGE_ARCHITECTURE",
     "file": "ZERO_KNOWLEDGE_ARCHITECTURE.md",
     "version": "1.1.0",

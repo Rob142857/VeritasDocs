@@ -2780,11 +2780,42 @@ class VeritasApp {
                 feeEthStr = formatUnits(feeWei, 18);
                 lines.push('est. fee ≈ ' + this.escapeHtml(feeEthStr) + ' ETH');
               }
+            } else {
+              // Surface why gas price is missing for easier troubleshooting
+              if (d.rpc && d.rpc.gasPriceError) {
+                lines.push('gasPrice error: ' + this.escapeHtml(String(d.rpc.gasPriceError).slice(0, 140)));
+              } else {
+                lines.push('gasPrice=(unavailable from RPC)');
+              }
+            }
+            // Show estimateGas value if present (in hex)
+            if (estGasHex) {
+              lines.push('estimateGas=' + this.escapeHtml(estGasHex));
             }
           } catch {}
           if (d.rpc && d.rpc.estimateGasNote && !d.rpc.estimateGas) {
             lines.push('estimateGas=' + this.escapeHtml(String(d.rpc.estimateGasNote)));
           }
+          if (d.rpc && d.rpc.estimateGasError) {
+            lines.push('estimateGas error: ' + this.escapeHtml(String(d.rpc.estimateGasError).slice(0, 140)));
+          }
+          // Server-provided costs (fallback or authoritative if present)
+          try {
+            const c = d.costs;
+            if (c) {
+              if (c.gasPriceWeiHex) {
+                lines.push('gasPrice=' + this.escapeHtml(String(c.gasPriceWeiHex)) + (c.gasPriceGwei ? ' (' + this.escapeHtml(String(c.gasPriceGwei)) + ' gwei)' : ''));
+              }
+              if (c.estimateGasHex) {
+                lines.push('estimateGas=' + this.escapeHtml(String(c.estimateGasHex)));
+              }
+              if (c.feeEth) {
+                lines.push('est. fee ≈ ' + this.escapeHtml(String(c.feeEth)) + ' ETH');
+                if (typeof c.feeUsd === 'number') lines.push('≈ ' + this.escapeHtml(String(c.feeUsd.toFixed ? c.feeUsd.toFixed(2) : c.feeUsd)) + ' USD');
+                if (typeof c.feeAud === 'number') lines.push('≈ ' + this.escapeHtml(String(c.feeAud.toFixed ? c.feeAud.toFixed(2) : c.feeAud)) + ' AUD');
+              }
+            }
+          } catch {}
           // Optional fiat conversion (best-effort)
           try {
             if (feeEthStr) {

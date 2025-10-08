@@ -333,10 +333,32 @@ vdcHandler.post('/ethereum/verify', async (c) => {
     // eth_gasPrice
     try {
       const resp = await fetch(rpcUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'eth_gasPrice', params: [] }) });
-  const json: any = await resp.json();
-  rpcResults.gasPrice = (json && json.result) || null;
+      const json: any = await resp.json();
+      if (json && json.result) {
+        rpcResults.gasPrice = json.result;
+        rpcResults.gasPriceSource = 'eth_gasPrice';
+      } else if (json && json.error) {
+        rpcResults.gasPrice = null;
+        rpcResults.gasPriceError = json.error?.message || JSON.stringify(json.error);
+      } else {
+        rpcResults.gasPrice = null;
+      }
     } catch (e: any) {
       rpcResults.gasPriceError = e?.message || String(e);
+    }
+
+    // Fallback: derive gas price from latest baseFeePerGas via eth_feeHistory
+    if (!rpcResults.gasPrice) {
+      try {
+        const fhReq = { jsonrpc: '2.0', id: 22, method: 'eth_feeHistory', params: [ '0x1', 'latest', [] ] };
+        const r = await fetch(rpcUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(fhReq) });
+        const j: any = await r.json();
+        const baseFees: unknown = j?.result?.baseFeePerGas;
+        if (Array.isArray(baseFees) && baseFees.length > 0 && typeof baseFees[baseFees.length - 1] === 'string') {
+          rpcResults.gasPrice = baseFees[baseFees.length - 1];
+          rpcResults.gasPriceSource = 'baseFeePerGas';
+        }
+      } catch {}
     }
 
     // eth_estimateGas if from address is configured
@@ -345,8 +367,15 @@ vdcHandler.post('/ethereum/verify', async (c) => {
       try {
         const params = [{ from, to: from, data: dataHex, value: '0x0' }];
         const resp = await fetch(rpcUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 3, method: 'eth_estimateGas', params }) });
-  const json: any = await resp.json();
-  rpcResults.estimateGas = (json && json.result) || null;
+        const json: any = await resp.json();
+        if (json && json.result) {
+          rpcResults.estimateGas = json.result;
+        } else if (json && json.error) {
+          rpcResults.estimateGas = null;
+          rpcResults.estimateGasError = json.error?.message || JSON.stringify(json.error);
+        } else {
+          rpcResults.estimateGas = null;
+        }
       } catch (e: any) {
         rpcResults.estimateGasError = e?.message || String(e);
       }
@@ -354,6 +383,50 @@ vdcHandler.post('/ethereum/verify', async (c) => {
       rpcResults.estimateGas = null;
       rpcResults.estimateGasNote = 'SYSTEM_ETH_FROM_ADDRESS not configured; skipping gas estimation';
     }
+
+    // Compute fee and optional fiat conversion if possible
+    let costs: any = undefined;
+    try {
+      if (rpcResults.gasPrice && rpcResults.estimateGas) {
+        const gasWei = BigInt(rpcResults.gasPrice);
+        const gasUnits = BigInt(rpcResults.estimateGas);
+        const feeWei = gasWei * gasUnits;
+        const formatUnits = (bn: bigint, decimals: number): string => {
+          const base = 10n ** BigInt(decimals);
+          const integer = bn / base;
+          const fraction = bn % base;
+          let fracStr = fraction.toString().padStart(decimals, '0');
+          fracStr = fracStr.replace(/0+$/, '');
+          return fracStr.length ? integer.toString() + '.' + fracStr : integer.toString();
+        };
+        const gasGwei = formatUnits(gasWei, 9);
+        const feeEth = formatUnits(feeWei, 18);
+        costs = {
+          gasPriceWeiHex: rpcResults.gasPrice,
+          gasPriceGwei: gasGwei,
+          estimateGasHex: rpcResults.estimateGas,
+          feeWeiHex: '0x' + feeWei.toString(16),
+          feeEth,
+        };
+        // Best-effort fiat prices
+        try {
+          const r = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd,aud', { cf: { cacheTtl: 60 }, headers: { 'accept': 'application/json' } });
+          if (r.ok) {
+            type PriceResp = { ethereum?: { usd?: number; aud?: number } };
+            const p = (await r.json()) as PriceResp;
+            const usd = p && p.ethereum && typeof p.ethereum.usd === 'number' ? p.ethereum.usd : undefined;
+            const aud = p && p.ethereum && typeof p.ethereum.aud === 'number' ? p.ethereum.aud : undefined;
+            costs.usd = usd;
+            costs.aud = aud;
+            const fee = parseFloat(feeEth);
+            if (!Number.isNaN(fee)) {
+              if (typeof usd === 'number') costs.feeUsd = +(fee * usd).toFixed(2);
+              if (typeof aud === 'number') costs.feeAud = +(fee * aud).toFixed(2);
+            }
+          }
+        } catch {}
+      }
+    } catch {}
 
     return c.json<APIResponse>({
       success: true,
@@ -366,7 +439,8 @@ vdcHandler.post('/ethereum/verify', async (c) => {
           timestamp: anchor.timestamp
         },
         payload: { dataHexLength: dataHex.length },
-        rpc: rpcResults
+        rpc: rpcResults,
+        costs
       }
     });
   } catch (error: any) {

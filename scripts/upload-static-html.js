@@ -29,7 +29,7 @@ for (const file of files) {
   }
   const key = `static/${file}`;
   console.log(`Uploading ${file} -> r2://${BUCKET}/${key}`);
-  sh('npx', ['wrangler', 'r2', 'object', 'put', `${BUCKET}/${key}`, '--file', abs]);
+  sh('npx', ['wrangler', 'r2', 'object', 'put', `${BUCKET}/${key}`, '--file', abs, '--remote']);
 }
 
 console.log('✓ Static HTML uploaded to R2');
